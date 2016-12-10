@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "My way to web development"
-date:   2016-12-10 17:57:54 +0000
+date:   2016-12-10 12:57:54 -0500
 ---
 
 
