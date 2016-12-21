@@ -56,7 +56,7 @@ Please note that this algorithm will not work with objects with relationships, s
 class Artist
 …
   def song
-		@songs.dup.deep_freeze
+    @songs.dup.deep_freeze
   end
 …
 end
