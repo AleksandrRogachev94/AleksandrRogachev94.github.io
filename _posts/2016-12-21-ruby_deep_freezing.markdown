@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Ruby Deep Freezing"
-date:   2016-12-21 20:22:23 +0000
+date:   2016-12-21 15:22:24 -0500
 ---
 
 
@@ -37,6 +37,7 @@ The reason of it is that we don’t modify references of :tv and :phones. But I 
 So I have implemented two methods: #deep_freeze and #deep_frozen?. These algorithms are based on recursion. First of all, I iterate over the enumerable nested objects and recursively call #deep_freeze until current object is no more enumerable. Then I iterate over the instance variables of current object and (again) recursively call #deep_freeze until there is no more instance variable. So instance variables can be enumerable again.  At the end of this method I call #freeze on self. #deep_frozen? method has a similar structure. It uses the Boolean flag to trace if there is any nested element that is not freezed.
 
 As a result, #deep_freeze has 2 general functions:
+
 1.	Freezing all objects that are nested inside of the origin object.
 2.	Freezing all instance variables which are inside of nested objects.
 
