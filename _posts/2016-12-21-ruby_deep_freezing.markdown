@@ -12,11 +12,11 @@ Let’s talk about it a little bit closer. For example, we have a hash:
 ```
 devices = {
   tv: “Samsung”,
-  phones: [“Iphone”, “Samsung”] 
+  phones: [“iPhone”, “Samsung”] 
 }
 ```
 
-Strings and Arrays are mutable objects (in opposite to Fixnum or Symbol…). Mutability means that we can change a value without changing a variable that points to this value (its address). In our example variable “phones” is just a reference to the array [“iphone”, “galaxy s7”]. “devices” is a hash that contains two variables (:tv and :phones) pointing on mutable objects.
+Strings and Arrays are mutable objects (in opposite to Fixnum or Symbol…). Mutability means that we can change a value without changing a variable that points to this value (its address). In our example variable “phones” is just a reference to the array [“iPhone”, “Samsung”]. “devices” is a hash that contains two variables (:tv and :phones) pointing on mutable objects.
 
 So if we try to write devices.freeze, we will prevent “devices” object from changing. It means that we can’t do anything like
 
