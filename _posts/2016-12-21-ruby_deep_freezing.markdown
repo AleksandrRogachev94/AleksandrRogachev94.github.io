@@ -11,8 +11,8 @@ Let’s talk about it a little bit closer. For example, we have a hash:
 
 ```
 devices = {
-	tv: “Samsung”,
-	phones: [“Iphone”, “Samsung”] 
+  tv: “Samsung”,
+  phones: [“Iphone”, “Samsung”] 
 }
 ```
 
