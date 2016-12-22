@@ -12,7 +12,7 @@ While I was studying at school, I had already made my first serious programming 
 I have just graduated from the top university in Russia, Moscow State University (department of physics). It has 27-th place in world ranking by subject, physics.
 
 When I was studying at the university, I was working in outstanding scientific group, which deals with photonics and ultrasensitive magnetic sensors. Our results were published in several scientific journals. For example, you can find our paper in Applied Physics Letters, famous American scientific journal:
-http://scitation.aip.org/content/aip/journal/apl/109/16/10.1063/1.4964887
+[http://scitation.aip.org/content/aip/journal/apl/109/16/10.1063/1.4964887](http://scitation.aip.org/content/aip/journal/apl/109/16/10.1063/1.4964887)
 
 The major part of my job was numerical simulation of physical processes. I used C++ to do that. Eventually, I found that I love coding and want to bind my life with it. That is why I decided to start my software developer career. It is web development that is extremely exciting for me.
 
