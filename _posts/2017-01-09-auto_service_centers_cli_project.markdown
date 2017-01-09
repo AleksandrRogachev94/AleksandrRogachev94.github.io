@@ -5,7 +5,7 @@ date:   2017-01-09 05:58:34 -0500
 ---
 
 
-In this article I will talk about my CLI project about searching 30 auto service centers near arbitrary zip code. It is based on scraping information from* yellowpages.com* using `nokogiri` gem.
+In this article I will talk about my CLI project about searching 30 auto service centers near arbitrary zip code. It is based on scraping information from *yellowpages.com* using `nokogiri` gem.
 The minimum requirements were the following:
 
 * Make a CLI for interfacing with the application
