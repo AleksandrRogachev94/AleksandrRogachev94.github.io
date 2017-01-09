@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Auto Service Centers CLI Project "
-date:   2017-01-09 10:58:33 +0000
+date:   2017-01-09 05:58:34 -0500
 ---
 
 
@@ -30,7 +30,7 @@ So now you can install and try my gem :)
 
 Here are links:
 
-[rubygems](https://rubygems.org/gems/autoservicecli)
+[rubygems](https://rubygems.org/gems/auto_service_cli)
 
-[github](https://github.com/AleksandrRogachev94/autoservicecligem)
+[github](https://github.com/AleksandrRogachev94/auto_service_cli_gem)
 
