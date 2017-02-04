@@ -35,7 +35,7 @@ In this schema an artist is considered as a parent (of songs) and songs are cons
 
 So now (when we created tables and defined macros) ActiveRecord gives us a bunch of methods (this is the only thing that it gives us: new methods). We can do the following:
 
- ```
+```
 artist1 = Artist.create(name: “Artist1”)
 song1 = Song.create(name: “Song1”)
 song1.artist = artist1 
