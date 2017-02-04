@@ -65,7 +65,7 @@ artist = Song.new.build_artist
 artist.save
 ```
 
-The first snippet will result in 2 SQL statements: both artist and song will be saved in db. But the second one will fire only one SQL statement: the song will not be persisted!  That was really confusing for me until I found the great rule for me. One should consider the following notation to understand it. We say that the object is a parent in the context if it is located on the left of the expression before `.`. So in ` song.artist = Artist.new` song is a parent and we created an Artist from the song in this context. In `artist = Song.new.build_artist` `Song.new` is a parent again. Ok, now the rule:
+The first snippet will result in 2 SQL statements: both artist and song will be saved in db. But the second one will fire only one SQL statement: the song will not be persisted!  That was really confusing for me until I found the great rule for me. One should consider the following notation to understand it. We say that the object is a parent in the context if it is located on the left of the expression before `.`. So in `song.artist = Artist.new` song is a parent and we created an Artist from the song in this context. In `artist = Song.new.build_artist` `Song.new` is a parent again. Ok, now the rule:
 
 **Saving the parent will guaranty saving all it's children. The reverse is false.**
 
