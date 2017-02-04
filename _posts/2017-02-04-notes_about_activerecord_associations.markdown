@@ -6,6 +6,7 @@ date:   2017-02-04 10:02:18 -0500
 
 In this post I would like to talk about Associations and corresponding methods in ActiveRecord. It gives us a bunch of prewritten methods to talk with databases and make different associations between the models. I was a little bit confused when I approached it at the first time. I understood plain ORM faster than AR. Big robust libraries are great and give us power. But the main disadvantage is that often we need to spend a lot of time studying its functionality and interfaces. There are some subtle but important principles in ActiveRecord.
 Let’s consider simple relationships between Artists and Songs: Artist has many songs and Song belongs to an Artist.
+
 ```
 class CreateTables < ActiveRecord::Migration
   create_table :artists do |t|
@@ -17,6 +18,7 @@ class CreateTables < ActiveRecord::Migration
   end
 end
 ```
+
 ```
 class Artist < ActiveRecord::Base
   has_many :songs
@@ -26,6 +28,7 @@ class Song < ActiveRecord::Base
   belongs_to :artist
 end
 ```
+
 In this schema an artist is considered as a parent (of songs) and songs are considered as children (of an Artist).
 
 ## Creating mutual assocations
