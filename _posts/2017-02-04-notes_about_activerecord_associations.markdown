@@ -34,11 +34,13 @@ In this schema an artist is considered as a parent (of songs) and songs are cons
 * **Creating mutual assocations**
 
 So now (when we created tables and defined macros) ActiveRecord gives us a bunch of methods (this is the only thing that it gives us: new methods). We can do the following:
+
  ```
 artist1 = Artist.create(name: “Artist1”)
 song1 = Song.create(name: “Song1”)
 song1.artist = artist1 
 ```
+
 Our `song1` is associated with the `artist1` and after typing `song1.artist` we will get `artist1` object. BUT if we type artist1.songs we will get [] – an empty array! We should adhere to the following rule:
 
 **If we tell the child that it belongs to the parent, the parent will not know about that relationship until updating the database. If you tell the parent that a certain child object has been added to its collection, both the parent and the child will always know about the association.**
@@ -49,16 +51,20 @@ The best way to add mutual associations is to use one of the following methods t
 * **Saving of the associated objects**
 
 Let’s talk about saving of the associated objects. The problems occur when we try to make associations and then save these objects. Consider two situations:
+
 ```
 song = Song.new
 song.artist = Artist.new
 song.save
 ```
+
 and
+
 ```
 artist = Song.new.build_artist
 artist.save
 ```
+
 The first snippet will result in 2 SQL statements: both artist and song will be saved in db. But the second one will fire only one SQL statement: the song will not be persisted!  That was really confusing for me until I found the great rule for me. One should consider the following notation to understand it. We say that the object is a parent in the context if it is located on the left of the expression before `.`. So in ` song.artist = Artist.new` song is a parent and we created an Artist from the song in this context. In `artist = Song.new.build_artist` `Song.new` is a parent again. Ok, now the rule:
 
 **Saving the parent will guaranty saving all it's children. The reverse is false.**
