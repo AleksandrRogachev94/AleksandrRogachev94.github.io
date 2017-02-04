@@ -31,7 +31,7 @@ end
 
 In this schema an artist is considered as a parent (of songs) and songs are considered as children (of an Artist).
 
-## Creating mutual assocations
+# Creating mutual assocations
 
 So now (when we created tables and defined macros) ActiveRecord gives us a bunch of methods (this is the only thing that it gives us: new methods). We can do the following:
  ```
@@ -46,7 +46,7 @@ Our `song1` is associated with the `artist1` and after typing `song1.artist` we 
 If you put `song1.save` after that snippet the association will become mutual because song1 will get appropriate artist_id in db. The simplier way to make mutual association is through `artist1.songs << song1`. `#collection<<` is the overridden by ActiveRecord method which makes all necessary associations for us and pushes it into db. BUT there is one more problem concerning efficiency. This method returns ALL artist’s songs from the database and puts it into memory. So if our database has millions of songs then our program can just break or be extremely slow because of lack of memory.
 The best way to add mutual associations is to use one of the following methods that return only one object. The first one is `artist.songs.build(name: “Song2”)`. It will build a new instance of a Song class. You can also use `create` instead of `build` to immediately save a new song into database. `#concat` method allows us to add an existing object to the artist’s songs: `artist.songs.concat(song1)`. It will make all associations and push it into db as well.
 
-## Saving of the associated objects
+# Saving of the associated objects
 
 Let’s talk about saving of the associated objects. The problems occur when we try to make associations and then save these objects. Consider two situations:
 ```
@@ -66,7 +66,7 @@ The first snippet will result in 2 SQL statements: both artist and song will be 
 In the first snippet we saved parent, hence both parent and child were saved. But in the second snippet we saved child so the parent was not saved. This logic works with has many : has many associations as well.
 If you follow this rule you will avoid sudden mistakes in your programs.
 
-## Query caching
+# Query caching
 
 The last thing I want to talk about is caching in ActiveRecord. You should be aware of the following:
 
