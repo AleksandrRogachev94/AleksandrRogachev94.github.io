@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Sinatra Recruiting Agencies Management"
-date:   2017-02-13 00:35:22 +0000
+date:   2017-02-12 19:35:23 -0500
 ---
 
 When I finished Sinatra part in Flatiron school, I started to feel the force. Actually this is enough to start building full scale web sites! And I started to make the project… This is my second ruby project within Flatiron school program. The minimum requirements were the following:
@@ -25,7 +25,7 @@ In my code I follow MVC (model - view - controller) pattern. I have already ment
 
 Authentication and authorization are made carefully. Recruiters can’t do and access anything but creating requests to their agencies. Passwords are not stored in db as they are. I use `bcrypt` gem. It performs cryptographic hash function on passwords and then “salts” the result by adding additional unique for each user random sequence of characters. Note that this algorithm is intentionally slow comparing to the usual fast hash functions such as SHA. It prevents the app from being easily hacked.
 
- In order to make simple but pretty looking interface I made simple CSS file in `public` directory and user bootstrap. Now its interface looks like shown in Fig. 2.
+ In order to make simple but pretty looking interface I made simple CSS file in `public` directory and used bootstrap. Now its interface looks like shown in Fig. 2.
 
 ![]( http://imgh.us/post5_program.png)
 
