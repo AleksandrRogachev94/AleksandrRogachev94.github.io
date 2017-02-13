@@ -5,6 +5,7 @@ date:   2017-02-12 19:35:23 -0500
 ---
 
 When I finished Sinatra part in Flatiron school, I started to feel the force. Actually this is enough to start building full scale web sites! And I started to make the project… This is my second ruby project within Flatiron school program. The minimum requirements were the following:
+
 1.	Build an MVC Sinatra Application.
 2.	User ActiveRecord with Sinatra.
 3.	User Multiple Models.
