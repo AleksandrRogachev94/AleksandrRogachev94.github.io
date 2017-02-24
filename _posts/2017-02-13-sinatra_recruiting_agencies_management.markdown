@@ -35,5 +35,6 @@ My app looks like finished program now. I learned a lot while creating this prog
 
 
 [Site on heroku](https://recruiting-agencies-manager.herokuapp.com)
+
 [Github repo](https://github.com/AleksandrRogachev94/sinatra-recruiting-agencies-management)
 
