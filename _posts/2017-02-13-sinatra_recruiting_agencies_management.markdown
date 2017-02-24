@@ -30,9 +30,10 @@ Authentication and authorization are made carefully. Recruiters can’t do and a
 
 ![]( http://imgh.us/post5_program.png)
 
-My app looks like finished program now. I learned a lot while creating this program and really happy that it works exactly as I wanted.
+My app looks like finished program now. I learned a lot while creating this program and really happy that it works exactly as I wanted. I deployed this app on heroku.
 
-Here is a github repo:
 
-[https://github.com/AleksandrRogachev94/sinatra-recruiting-agencies-management]( https://github.com/AleksandrRogachev94/sinatra-recruiting-agencies-management)
+
+[Site on heroku](https://recruiting-agencies-manager.herokuapp.com)
+[Github repo](https://github.com/AleksandrRogachev94/sinatra-recruiting-agencies-management)
 
