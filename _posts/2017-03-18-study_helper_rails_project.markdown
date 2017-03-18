@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Study Helper. Rails project."
-date:   2017-03-18 02:23:08 +0000
+date:   2017-03-17 22:23:08 -0400
 ---
 
 ![]( http://imgh.us/study_helper2.jpg)
@@ -50,7 +50,7 @@ I’m pretty happy with the result and my web site looks pretty beautiful too (u
 
 Now (after completing ruby part at Flatiron school) I need to say that after my story with C++ at the university, I fell in love Ruby. It is amazingly beautiful and lexical. As for me, it makes programmers happier. Of course it is not as fast and effective as, for example, C++, but it is worth. In web development we do not chase every fraction of a second and do not implement very complex resource-consuming algorithms. Ruby is perfect for its tasks. It allows us to write awesome web apps easily and quickly. Rails, in its turn, makes a lot of magic for us to concentrate on real, actual tasks, not the common ones (like handling HTTP protocol, complex routing and so on, so on, so on). And I love the idea of “convention over configuration”. It is really convenient and saves our time.
 
-Here is a github repo:
+Here is the github repo:
 
 [https://github.com/AleksandrRogachev94/study-helper](https://github.com/AleksandrRogachev94/study-helper)
 
