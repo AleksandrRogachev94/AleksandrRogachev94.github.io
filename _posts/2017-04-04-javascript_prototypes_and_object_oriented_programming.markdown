@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Javascript Prototypes and Object Oriented Programming."
-date:   2017-04-04 00:35:23 +0000
+date:   2017-04-03 20:35:24 -0400
 ---
 
 After C++, Java and Ruby, Javascript seems for me a little bit hard to understand. It is different in its core. It is prototype-based object oriented language. In this article I would like to write about it.
@@ -35,7 +35,7 @@ In this case all dogs share the same variable `name`.
 
 Objects in javascript contain methods too. It is not the best practice to declare functions definitions inside constructors. It leads to creation of `n` same function for `n` objects (unfortunately, this is the way Ruby works). We should use the same approach as I used in the last example: create functions directly in prototype. In this case all objects created from `Dog` constructor will share only one function.
 
-## Inheritance
+* **Inheritance**
 
 In javascript all objects inherit from other objects. The highest node in this chain is `Object.prototype`. All objects eventually inherit from this prototype. Let’s talk about the ways to implement our own inheritance in javascript. The idea is to change prototype of a constructor to be equal to prototype (its copy) of other constructor.
 So the classical inheritance schema looks like this:
