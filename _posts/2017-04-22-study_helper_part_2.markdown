@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "Study Helper. Part 2"
-date:   2017-04-22 01:15:30 +0000
+date:   2017-04-21 21:15:30 -0400
 ---
 
 
