@@ -31,7 +31,7 @@ Delete if he/she is an owner of a comment to be deleted or an owner of the corre
 
 
 
-Next, now users can upload their photos (avatar) and lessons attachment files (like pdf, doc…). Firstly I implemented it just using `paperlip` - an easy and impressive way to upload/download files in rails.  I decided to store all data in Amazon AWS S3storage, which is, by the way, awesome and gives us free tier for 1 year: 50 GB, 2000 post requests, 10000 get requests per month. Luckily, rails has `aws-sdk` gem to handle connection between rails app and S3. 
+Next, now users can upload their photos (avatar) and lessons attachment files (like pdf, doc…). Firstly I implemented it just using `paperlip` - an easy and impressive way to upload/download files in rails.  I decided to store all data in Amazon AWS S3 storage, which is, by the way, awesome and gives us free tier for 1 year: 50 GB, 2000 post requests, 10000 get requests per month. Luckily, rails has `aws-sdk` gem to handle connection between rails app and S3. 
 
 Then I realized that it’s not the best practice to upload files into S3 right from the main web process. It blocks server and 1) user should wait until uploading is finished, 2) other users are slowed down or completely stuck (if you use only 1 process with 1 thread). The best way to implement it is to use backgrounds processes: `workers`. One of the approaches is to use `sidekiq` together with `delayed_paperclip` gems. `delayed_paperclip` gem uses `ActiveJob` to create delayed jobs. You just need to specify adapter: in my case `sidekiq`.
 
@@ -62,6 +62,8 @@ function Comment(attributes)  {
 
 
 Here, `attributes` is a JSON object from the API. I've written almost all methods concerning comments (like rendering, creating templates, attaching event listeners, formatting...) within this class.
+
+Users can **simultaneously** edit as many comments as they wants. I implemented it in the following way. When user clicks "Update" button on comment, js script loads information about this comment from html (and replaces it with a form), creates new `Comment` object, and pushes this object to `Comment.commentsToUpdate` array (initially empty). When user clicks update/cancel, script searches the corresponding comment in `Comment.commentsToUpdate`, removes it from this array and replaces a form with new (update) or old (cancel) data.
 
 Similarly, I've implemented `Lesson` class. My Rails API renders lesson with all its comments (has_many relationship). I decided not to render formatted html lessons and comments from the server at all. When lesson show page is loaded, firstly it is blank. After loading it sends a new `XHR` request for the lesson with its comments. When the browser gets response, it creates html from JSON and **Handlebars** Templates and puts it on the page. So this logic was easily used to implement AJAX next and previous lesson functionality. By the way I think this logic is close to how Rails turbolinks work. And on each lesson page you can create/update/delete comments for this lesson.
 
