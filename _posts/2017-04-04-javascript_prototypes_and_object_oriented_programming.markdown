@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Javascript Prototypes and Object Oriented Programming."
+title:  "Javascript Prototypes and Object Oriented Programming"
 date:   2017-04-03 20:35:24 -0400
 ---
 
