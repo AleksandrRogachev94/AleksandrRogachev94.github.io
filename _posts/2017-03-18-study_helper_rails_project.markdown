@@ -1,6 +1,6 @@
 ---
 layout: post
-title:  "Study Helper. Rails project."
+title:  "Study Helper. Rails project. Part 1"
 date:   2017-03-17 22:23:08 -0400
 ---
 
