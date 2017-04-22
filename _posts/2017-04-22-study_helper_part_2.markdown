@@ -11,7 +11,7 @@ date:   2017-04-21 21:15:30 -0400
 
 In the [first part](http://aleksandr-rogachev-blog.com/2017/03/18/study_helper_rails_project/) I’ve written about basic backend functionality of my Rails project. Since then I added some backend functionality and used Javascript to make User Interface more usable and pretty. So this post is divided into two parts: 1) Some New Backend features and 2) Frontend features.
 
-# 1) New Backend features
+* **1) New Backend features**
 
 First of all, I added comments functionality. Each lesson can be commented.  In order to implement authorization to update/delete comments I used `Pundit` gem (actually my app uses Pundit everywhere). Below you can see the authorization rules: 
 
@@ -40,8 +40,7 @@ After writing `process_in_background :doc` in a model, delayed paperclip will au
 By the way, it’s still not the most effective way to send files to the storage. Current approach uses the following logic: browser sends file to our server, server processes this file (for instance, resizes it, makes thumb…), and then queues the job for sidekiq. It is still slow with large files. The best way is to send files directly from the client (browser) to storage. Maybe I will try to implement it in my next iteration of improving the Study Helper.
 
  
-
-# 2) Frontend Javascript features
+* **2) Frontend Javascript features**
 
 Finally, let’s talk about Javascript Frontend. This is the fourth project in Flatiron school: add Javascript and jQuery to the rails project. The main purpose is to get very familiar with AJAX. While the process of implementing AJAX loading resources looks relatively clear and simple for me, when it went to the real application it became hard… Actually, each robust (for example, handling all errors and displaying it) AJAX feature requires a lot of efforts, code (comparing to rails tasks), and troubleshooting.
 
