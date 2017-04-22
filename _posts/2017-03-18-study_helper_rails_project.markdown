@@ -4,13 +4,13 @@ title:  "Study Helper. Rails project."
 date:   2017-03-17 22:23:08 -0400
 ---
 
-![]( http://imgh.us/study_helper2.jpg)
+![](http://imgh.us/study_helper2.jpg)
 
 Well, I should say that Rails is awesome. It extremely simplifies our work as developers. Now I understand that Rails is giant comparing to Sinatra framework. It gives us a lot of tools in order to concentrate only on our real tasks.
 
 I was excited about the opportunity of Rails final project in Flatiron school. Well, it was difficult to choose a theme for my app because there is a lot of stuff already implemented on the internet. Finally, I decided to build Study Helper: app for teachers and students. In this application all users can create (and manage) lessons and choose a lesson’s category (physics, math…) from the existing list or create a new one.  By default, all other users can’t see these lessons. But they can make a request (like in facebook) to add them as students. If a teacher accepts this request, student is granted access to his lessons. 
 
-![]( http://imgh.us/schema_studyhelper_1.png)
+![](http://imgh.us/schema_studyhelper_1.png)
 
 Take a look at schema of models and their relationships. I decided to make one model for both teachers and students. Every user can study from his teachers and teach to his students. It was interesting to implement self-referential associations. Additional model is needed for that purpose: `Studyship`. Each relation between users is stored in studyships table. Finally, I decided to make the following models associations:
 
