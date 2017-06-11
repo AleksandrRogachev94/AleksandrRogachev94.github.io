@@ -1,7 +1,7 @@
 ---
 layout: post
-title:  Chat Vote Go
-date:   2017-05-26 21:42:13 +0000
+title:  "Chat Vote Go"
+date:   2017-05-26 17:42:14 -0400
 ---
 
 
@@ -68,6 +68,8 @@ It means that I almost finished Flatiron school! It was really immersive, exciti
 [Github Front End](https://github.com/AleksandrRogachev94/chat-vote-go-frontend)
 
 [Github Back End](https://github.com/AleksandrRogachev94/chat-vote-go-backend)
+
+[Website](https://chatvotego.herokuapp.com)
 
 ![chat](https://s3.amazonaws.com/my-docs-bucket/chat.png)
 
