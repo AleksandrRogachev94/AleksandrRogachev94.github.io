@@ -1,6 +1,6 @@
 ---
 layout: post
-title:      "Showing Online Users with Socket.io without persistence"
+title:      "Showing Online Users with Socket.IO without persistence"
 date:       2018-10-01 20:04:56 -0400
 permalink:  showing_online_users_with_socket_io_without_persistence
 ---
@@ -38,9 +38,7 @@ All right, so I outlined all major steps. Now let's dive in to code details in B
 
 **Backend**
 
-Let's start with backend
-
-I define a service `SocketsService`:
+Let's start with backend. I define a service `SocketsService`:
 
 ```typescript
 import * as socketIO from 'socket.io';
