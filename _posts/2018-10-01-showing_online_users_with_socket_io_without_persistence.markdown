@@ -1,7 +1,7 @@
 ---
 layout: post
 title:      "Showing Online Users with Socket.io without persistence"
-date:       2018-10-02 00:04:54 +0000
+date:       2018-10-01 20:04:56 -0400
 permalink:  showing_online_users_with_socket_io_without_persistence
 ---
 
@@ -36,7 +36,7 @@ All right, so I outlined all major steps. Now let's dive in to code details in B
 
 
 
-## Backend
+**Backend**
 
 Let's start with backend
 
@@ -102,7 +102,7 @@ It follows the flow that I described above. So it uses 3 more events: `REPORT_RE
 
 
 
-## Frontend
+**Frontend**
 
 Things are slightly more complicated in Frontend. First of all, we need to implement `UsersService` that will store and handle adding, removing, and updating online users. It's up to you, but in this example I will provide a very simple version of it (in real life you would probably want to use pub/sub to subscribe to users array changes):
 
