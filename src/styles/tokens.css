@@ -1,0 +1,89 @@
+/*
+ * Two palettes, deliberately not blended (CLAUDE.md rule 4).
+ *
+ *   The room   — warm painterly semi-realism. Cozy, lived-in. This is the person.
+ *   The focus  — near-black, one saturated accent belonging to the object you pushed
+ *                into, plus a mono status strip. This is the engineering.
+ *
+ * Room tokens are unprefixed-by-context but namespaced `--room-*`; focus tokens are
+ * `--focus-*`. Nothing should ever read a `--room-*` token inside a focus state or
+ * vice versa — if you find yourself wanting to, the two languages are leaking.
+ */
+
+:root {
+  /* ---- The room: warm ------------------------------------------------ */
+  --room-bg: #f2e9dc;         /* warm paper, the ground behind the art */
+  --room-surface: #e7d9c4;    /* raised warm surface: corner UI, labels */
+  --room-ink: #2c241d;        /* body text on warm */
+  --room-ink-soft: #6d5c4b;   /* secondary text, captions */
+  --room-line: #d2c0a6;       /* hairlines on warm */
+  --room-amber: #f0b95e;      /* the practicals: lamp, fairy lights, monitor spill */
+  --room-daylight: #b9d6e6;   /* cool daylight through the glass */
+
+  /* ---- Focus states: dark -------------------------------------------- */
+  --focus-bg: #0a0b0d;
+  --focus-surface: #14171b;
+  --focus-ink: #e6e9ed;
+  --focus-ink-soft: #868d97;  /* the mono status strip lives at this weight */
+  --focus-line: #242931;
+
+  /* ---- Accents: one per destination ----------------------------------
+   * Each focus state lights exactly one of these. They are peers — no accent
+   * is allowed to become the site's identity colour (PLAN.md: projects are peers).
+   * A new destination adds a token here and uses it via --accent. */
+  --accent-flowlab: #4cc2ff;
+  --accent-birdlense: #6fd88a;
+  --accent-robotrail: #ff9d44;
+  --accent-note: #f0b95e;
+  --accent: var(--accent-flowlab); /* overridden per focus state */
+
+  /* ---- Type ----------------------------------------------------------- */
+  --font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* ---- Motion ---------------------------------------------------------
+   * The camera push owns its own timing in the renderer; these are for UI. */
+  --ease-camera: cubic-bezier(0.4, 0.0, 0.2, 1);
+  --dur-ui: 180ms;
+  --dur-camera: 900ms;
+
+  /* Focus ring. Rule 3: it must always be visible, on both palettes. */
+  --ring: 2px solid currentColor;
+  --ring-offset: 3px;
+}
+
+/* Reduced motion collapses every duration to zero. The camera does not animate;
+ * focus states cut instantly (PLAN.md → Transitions). Renderer reads this too. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-ui: 0ms;
+    --dur-camera: 0ms;
+  }
+}
+
+/* ---- Minimal base --------------------------------------------------------
+ * Rule 2: the document is real. With CSS disabled this must still be a sane
+ * document, so the base layer stays thin and semantic. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--room-bg);
+  color: var(--room-ink);
+  font-family: var(--font-body);
+  line-height: 1.55;
+}
+
+:where(a) {
+  color: inherit;
+}
+
+:where(:focus-visible) {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}

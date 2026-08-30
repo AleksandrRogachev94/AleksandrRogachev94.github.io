@@ -1,0 +1,28 @@
+---
+import '../styles/tokens.css';
+
+// Scaffold placeholder. The room renderer mounts on top of this document in a later
+// step; the document itself is never replaced (CLAUDE.md rule 2 — the document is real,
+// and it is simultaneously the SEO, accessibility and reduced-motion layer).
+const title = 'Alex Rogachev';
+const description = 'Software, computer vision, and things built indoors.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body>
+    <main>
+      <h1>{title}</h1>
+      <p>{description}</p>
+      <p><em>Scaffold only — the room is not built yet.</em></p>
+    </main>
+  </body>
+</html>
