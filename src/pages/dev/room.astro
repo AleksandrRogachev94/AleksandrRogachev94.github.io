@@ -1,0 +1,183 @@
+---
+// Development harness for the room renderer. Not linked from anywhere and not part of
+// the site — it exists to answer one question from PLAN.md step 2: does the camera push
+// read as movement through a space, or as a zoom into a photo?
+import '../../styles/tokens.css';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>room renderer — dev</title>
+  </head>
+  <body>
+    <canvas id="room"></canvas>
+
+    <aside id="panel">
+      <p id="status">loading…</p>
+      <label>near z <input type="range" id="nearZ" min="0.4" max="3" step="0.05" value="1" /><output id="nearZOut">1.00</output></label>
+      <label>far z <input type="range" id="farZ" min="2" max="20" step="0.1" value="6" /><output id="farZOut">6.0</output></label>
+      <label>fov <input type="range" id="fov" min="20" max="80" step="1" value="42" /><output id="fovOut">42</output></label>
+      <label>push depth <input type="range" id="travel" min="0.2" max="0.95" step="0.01" value="0.55" /><output id="travelOut">0.55</output></label>
+      <label>edge cut <input type="range" id="edgeCut" min="0.02" max="1" step="0.01" value="1" /><output id="edgeCutOut">1.00</output></label>
+      <label>parallax <input type="range" id="parallax" min="0" max="0.12" step="0.002" value="0.02" /><output id="parallaxOut">0.020</output></label>
+      <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="0.25" /><output id="lateralOut">0.25</output></label>
+      <p class="hint">click a prop to push into it · Esc pulls back · drag to look around · wheel to dolly</p>
+    </aside>
+
+    <style>
+      html, body { height: 100%; }
+      body { margin: 0; overflow: hidden; background: #000; }
+      #room { display: block; width: 100vw; height: 100vh; cursor: crosshair; }
+      #panel {
+        position: fixed; top: 12px; left: 12px; width: 260px; padding: 12px 14px;
+        background: color-mix(in srgb, var(--focus-surface) 88%, transparent);
+        color: var(--focus-ink); border: 1px solid var(--focus-line); border-radius: 8px;
+        font: 12px/1.5 var(--font-mono); backdrop-filter: blur(8px);
+      }
+      #panel label { display: grid; grid-template-columns: 4.5em 1fr 3em; align-items: center; gap: 6px; margin: 6px 0; }
+      #panel input { width: 100%; accent-color: var(--accent); }
+      #panel output { text-align: right; color: var(--accent); }
+      #panel p { margin: 0 0 8px; }
+      #status { color: var(--accent); }
+      .hint { margin-top: 10px !important; color: var(--focus-ink-soft); font-size: 11px; }
+    </style>
+
+    <script>
+      import { createRoomRenderer } from '../../scripts/roomRenderer';
+
+      const COLOR = '/art/room-day-summer.webp';
+      const DEPTH = '/art/room-day-summer-depth.webp';
+
+      const canvas = document.getElementById('room') as HTMLCanvasElement;
+      const status = document.getElementById('status')!;
+      const $ = (id: string) => document.getElementById(id) as HTMLInputElement;
+      const out = (id: string) => document.getElementById(id) as HTMLOutputElement;
+
+      /** Read the depth map back on the CPU so a click can be turned into a 3D point. */
+      async function depthSampler(src: string) {
+        const img = await new Promise<HTMLImageElement>((res, rej) => {
+          const i = new Image();
+          i.onload = () => res(i); i.onerror = rej; i.src = src;
+        });
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const ctx = c.getContext('2d', { willReadFrequently: true })!;
+        ctx.drawImage(img, 0, 0);
+        const data = ctx.getImageData(0, 0, c.width, c.height).data;
+        // u, v in 0..1 with v measured from the *bottom*, matching the shader's uv.
+        return (u: number, v: number) => {
+          const x = Math.min(c.width - 1, Math.max(0, Math.round(u * (c.width - 1))));
+          const y = Math.min(c.height - 1, Math.max(0, Math.round((1 - v) * (c.height - 1))));
+          return data[(y * c.width + x) * 4] / 255;
+        };
+      }
+
+      const renderer = await createRoomRenderer({ canvas, colorSrc: COLOR, depthSrc: DEPTH });
+      if (!renderer) {
+        status.textContent = 'no webgl2 — the site would show the static image here';
+      } else {
+        const sampleDepth = await depthSampler(DEPTH);
+        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        let nearZ = 1.0, farZ = 6.0, fovDeg = 42, travel = 0.55, parallax = 0.02, lateral = 0.25;
+        let pointer = { x: 0, y: 0 };      // -1..1, drives the ambient parallax
+        let dolly = 0;                      // wheel offset along -Z
+        let target: [number, number, number] | null = null;   // the 3D point being pushed into
+        let t = 0;                          // 0 = home, 1 = fully pushed in
+
+        const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+        const easeInOut = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+
+        /** Screen point -> the 3D point the depth map puts under it. */
+        function unproject(clientX: number, clientY: number): [number, number, number] {
+          const r = canvas.getBoundingClientRect();
+          // The canvas may be a different aspect than the art; the shader reconstructs in
+          // image space, so map the pointer through the image's own frame.
+          const ndcX = ((clientX - r.left) / r.width) * 2 - 1;
+          const ndcY = 1 - ((clientY - r.top) / r.height) * 2;
+          const u = (ndcX + 1) / 2, v = (ndcY + 1) / 2;
+          const d = sampleDepth(u, v);
+          const z = 1 / lerp(1 / farZ, 1 / nearZ, d);
+          const tanHalf = Math.tan((fovDeg * Math.PI) / 180 / 2);
+          const aspect = canvas.width / canvas.height;
+          return [ndcX * tanHalf * aspect * z, ndcY * tanHalf * z, -z];
+        }
+
+        canvas.addEventListener('pointermove', (e) => {
+          const r = canvas.getBoundingClientRect();
+          pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+          pointer.y = 1 - ((e.clientY - r.top) / r.height) * 2;
+        });
+
+        canvas.addEventListener('click', (e) => {
+          target = unproject(e.clientX, e.clientY);
+          status.textContent = `push -> [${target.map((n) => n.toFixed(2)).join(', ')}]`;
+        });
+
+        addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') { target = null; status.textContent = 'home'; }
+        });
+
+        canvas.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          dolly = Math.min(1.5, Math.max(-1.5, dolly - e.deltaY * 0.002));
+        }, { passive: false });
+
+        function tick() {
+          // Ease toward or away from the push target. Because this reads a mutable
+          // `target` every frame, a click mid-pull-out just reverses cleanly — that is
+          // the "interruptible mid-move" requirement, and it is free with this shape.
+          const want = target ? 1 : 0;
+          t = reduced ? want : lerp(t, want, 0.06);
+          const k = easeInOut(Math.min(1, Math.max(0, t)));
+
+          const px = pointer.x * parallax * (1 - k);   // ambient parallax fades out as we push
+          const py = pointer.y * parallax * 0.6 * (1 - k);
+          const home: [number, number, number] = [px, py, -dolly];
+
+          const cam = renderer!.camera;
+          if (target) {
+            // Split the push into the part that costs artifacts and the part that does not.
+            //
+            // Rotating the camera reveals no new surface at all, and dollying straight
+            // forward reveals almost none - it mostly magnifies. Translating *sideways* is
+            // what uncovers the hidden area behind foreground objects, and that hidden area
+            // is exactly what the mesh has to smear. So drive the full distance forward,
+            // scale the sideways component by `lateral`, and make up the difference by
+            // turning to look at the target instead of sliding over to it.
+            const ex = home[0] + lateral * (target[0] * travel - home[0]);
+            const ey = home[1] + lateral * (target[1] * travel - home[1]);
+            const ez = target[2] * travel;
+            cam.eye = [lerp(home[0], ex, k), lerp(home[1], ey, k), lerp(home[2], ez, k)];
+            cam.center = [lerp(home[0], target[0], k), lerp(home[1], target[1], k), lerp(home[2] - 1, target[2], k)];
+          } else {
+            cam.eye = home;
+            cam.center = [home[0], home[1], home[2] - 1];
+          }
+          requestAnimationFrame(tick);
+        }
+
+        function bind(id: string, apply: (v: number) => void, fmt = (v: number) => v.toFixed(2)) {
+          const el = $(id), o = out(id + 'Out');
+          const run = () => { const v = parseFloat(el.value); o.value = fmt(v); apply(v); };
+          el.addEventListener('input', run); run();
+        }
+        bind('nearZ', (v) => { nearZ = v; renderer.setDepthRange(nearZ, farZ); });
+        bind('farZ', (v) => { farZ = v; renderer.setDepthRange(nearZ, farZ); }, (v) => v.toFixed(1));
+        bind('fov', (v) => { fovDeg = v; renderer.setFov(v); }, (v) => v.toFixed(0));
+        bind('travel', (v) => { travel = v; });
+        bind('edgeCut', (v) => { renderer.setEdgeCut(v); });
+        bind('parallax', (v) => { parallax = v; }, (v) => v.toFixed(3));
+        bind('lateral', (v) => { lateral = v; });
+
+        status.textContent = 'home';
+        renderer.start();
+        tick();
+      }
+    </script>
+  </body>
+</html>
