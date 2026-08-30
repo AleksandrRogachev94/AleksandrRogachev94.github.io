@@ -157,18 +157,19 @@ true parallax, correct perspective, continuous, and **interruptible mid-move**.
 - **Generate the depth map with a monocular depth model** (Depth Anything V2) run over
   the finished art — far more reliable than asking an image model to draw one, and
   squarely in Alex's own CV wheelhouse.
-- **The window is a portal, not part of the depth map.** Depth Anything puts the yard at
-  roughly interior depth: painterly art has no atmospheric perspective, so the fence at
-  fifteen metres is painted as crisply as the desk at two and the model has no cue.
-  Generating a glazing-removed variant to give it a clearer look was tried and did not
-  help. The fix is geometric rather than inferred — the yard becomes **its own quad set
-  back behind the room plane**, which the seasonal swap already required anyway, so the
-  parallax falls out of the arrangement instead of being estimated. The muntin bars stay
-  on the room layer, holding still against the moving yard; that contrast is the entire
-  occlusion cue. The yard quad stays flat and its depth range stays small — a large step
+- **The window is a portal, not part of the depth map — and the model already does the
+  right thing here.** Depth Anything reads glass as a single flat surface (that behaviour
+  is deliberate; it is what stops robots walking into windows), so the window comes back
+  as part of the wall plane with no yard structure in it at all. That is exactly the room
+  layer we want. The yard is **its own quad set back behind the room plane**, which the
+  seasonal swap required anyway, so the parallax is arranged rather than estimated. The
+  muntin bars stay on the room layer, holding still against the moving yard; that contrast
+  is the entire occlusion cue. The yard quad stays flat and its depth range stays small — a large step
   at the window edge is exactly what tears a displaced mesh.
-- Depth output is a **starting point, not a deliverable**. The cropped foreground plant is
-  routinely under-read, and the poster and guitar need flattening back onto the wall plane.
+- **The first run came back clean** — foreground plant, cabinet, desk, chair and floor
+  recession all separate correctly, and the window is flat wall as described above. No
+  hand-editing of the depth map is planned. If the camera push reveals tearing, fix what
+  visibly breaks and nothing else.
 - Depth parallax stretches at depth discontinuities on large excursions, so the push
   travels ~70% of the way and **cross-fades to a dedicated close-up** for final detail.
 - Renderer: plain WebGL2, one displaced quad, ~200 lines — matches flowlab's

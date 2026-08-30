@@ -8,3 +8,22 @@ and see that file for the naming convention and the depth pipeline.
 
 The day image is the geometry lock. Every other variant is an *edit* of a locked master,
 because edits register pixel-for-pixel and fresh generations drift.
+
+## Depth maps
+
+Produced by the **Depth Anything V2** HuggingFace demo, "16-bit raw output". Three things
+about that format matter downstream:
+
+- **It is disparity, not distance.** Near is a *high* value, far is *low*. Anything that
+  displaces a mesh with it wants near-is-high, so no inversion is needed — but do not
+  assume the opposite when reading it.
+- **It is relative and un-normalised.** The values occupy a narrow slice of the 16-bit
+  range (`room-day-summer-depth.png` uses 12–376 of 65535). **Always rescale by the
+  image's own min/max** before using or exporting it. Treating the raw values as 0–65535
+  yields a nearly flat map.
+- **Same pixel dimensions as its colour image**, always.
+
+Take the 16-bit PNG rather than the 8-bit grayscale or the colour-mapped preview — the
+colour map is a visualisation and destroys the values. `public/art/*-depth.webp` is the
+8-bit rescaled export; WebP cannot carry 16 bits, so the master here is the one to edit
+from if editing is ever needed.

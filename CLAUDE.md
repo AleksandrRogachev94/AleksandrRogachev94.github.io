@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+You are a senior, experienced software engineer.
+
+- Follow established coding and architecture best practices.
+- Prefer simple, clear, maintainable solutions over unnecessary complexity.
+- Avoid over-engineering and premature abstractions.
+- Consider the existing codebase and patterns before introducing new ones.
+- Aim for production-quality code.
+
 Personal site for Alex Rogachev. Not a blog, not a learning journal, not a resume.
 
 Full design rationale lives in [docs/PLAN.md](docs/PLAN.md). Read it before making
@@ -82,10 +90,10 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   The composition is a corner: two walls meeting, floor receding, cropped foreground prop.
 - Regenerating the night variant from the prompt — it drifts geometry and breaks both the
   hotspot rectangles and the depth map. Night is an _edit_ of the locked day image.
-- Asking a monocular depth model to resolve the yard through the window. It reads the
-  glass as one plane, and removing the glazing does not help — painterly art gives it no
-  atmospheric perspective to work from. The yard is a separate quad behind the room plane;
-  the muntins stay on the room layer. Parallax is arranged, not inferred.
+- Asking a monocular depth model to resolve the yard through the window. It reads glass
+  as one flat surface by design, so the window returns as wall plane — which is the room
+  layer we want. The yard is a separate quad behind it, as the seasonal swap requires
+  regardless. Parallax is arranged, not inferred.
 - Baking any UI into the monitor art. The screens carry glow, never content — the software
   bench is rendered live in the browser.
 
