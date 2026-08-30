@@ -170,17 +170,29 @@ true parallax, correct perspective, continuous, and **interruptible mid-move**.
   recession all separate correctly, and the window is flat wall as described above. No
   hand-editing of the depth map is planned. If the camera push reveals tearing, fix what
   visibly breaks and nothing else.
-- Depth parallax stretches at depth discontinuities on large excursions, so the push
-  travels ~70% of the way and **cross-fades to a dedicated close-up** for final detail.
-- Renderer: plain WebGL2, one displaced quad, ~200 lines — matches flowlab's
+- **A single displaced mesh smears at every silhouette, and no parameter escapes it.**
+  Lateral motion is the only motion that produces real parallax and the only one that
+  produces disocclusion — the same motion, so the effect and the artifact cannot be
+  separated by tuning. The fix is a **layered depth image**: the interior is cut by depth
+  into `far` / `mid` / `near`, the surface behind each layer is inpainted offline with
+  LaMa, and the renderer draws them back to front. Sliding the camera then reveals real
+  painted floor instead of stretched pixels. Cut by depth, never by object — props at the
+  same depth have no relative parallax and need nothing. Process in
+  [PIPELINE.md](PIPELINE.md).
+- **Layers enlarge the excursion budget; they do not remove it.** Ambient parallax stays
+  small, and the push still travels ~70% of the way and **cross-fades to a dedicated
+  close-up** for final detail. A mesh cannot deliver the arrival at any resolution — the
+  information is not in the image — so the plate is load-bearing, not polish.
+- Renderer: plain WebGL2, a displaced mesh per layer, ~250 lines — matches flowlab's
   zero-dependency house style. Three.js only if the camera math turns fiddly.
 - Cost is trivial next to a fluid sim, but it still pauses when a focus state is live and
   on `document.hidden`.
 - No WebGL → static image, CSS scale. `prefers-reduced-motion` → no camera move at all,
   instant cut.
 
-**Assets per scene:** colour + depth, plus a close-up for each hotspot. Roughly 4 images
-and 2 depth maps for v1. **Build against flat placeholder blocks first** — art drops in
+**Assets per scene:** colour + depth, from which the three layers and their depth maps are
+derived offline, plus a close-up for each hotspot. Two hand-drawn masks are the only manual
+step; everything else regenerates from the master. **Build against flat placeholder blocks first** — art drops in
 with no code changes.
 
 ## Room controls — a second interaction grammar

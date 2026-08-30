@@ -12,9 +12,11 @@ Personal site for Alex Rogachev. Not a blog, not a learning journal, not a resum
 
 Full design rationale lives in [docs/PLAN.md](docs/PLAN.md). Read it before making
 structural changes — it records _why_ several obvious-looking ideas were rejected, and
-re-proposing them wastes everyone's time.
+re-proposing them wastes everyone's time. Art generation prompts are in
+[docs/PROMPTS.md](docs/PROMPTS.md); how a master becomes shipped layers is
+[docs/PIPELINE.md](docs/PIPELINE.md).
 
-Implement functionality step-by-step and educational, explaining what and why. Do not try to implement everything in one go.
+Implement functionality step-by-step and educational, explaining what and why at each step. Do not try to implement everything in one go. The user is new to astro framework and wants to learn.
 
 ## What this is
 
@@ -96,20 +98,37 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   regardless. Parallax is arranged, not inferred.
 - Baking any UI into the monitor art. The screens carry glow, never content — the software
   bench is rendered live in the browser.
+- Cutting layers per object rather than per depth band. Props at the same depth have no
+  relative parallax, so they disocclude nothing and a layer for each buys nothing.
+- Using the image generator to inpaint. It repaints the whole frame and has to re-pass a
+  registration diff every time; LaMa touches only masked pixels and is bit-identical
+  outside them, which is the property the whole locked-master discipline depends on.
+- Buying resolution to fix smearing. Smearing is geometric — a 4K master yields sharper
+  smears. Resolution fixes softness under magnification, which is a different row of the
+  table in docs/PIPELINE.md.
 
 ## Conventions
 
 - Zero-dependency bias, matching the sibling `flowlab` repo: reach for a library only
-  when hand-rolling is genuinely worse, not merely longer.
+  when hand-rolling is genuinely worse, not merely longer. **This governs what ships to
+  the browser.** Offline art tooling — the depth model, LaMa/IOPaint, image scripts — is
+  not a site dependency, never enters `package.json`, and is free to use whatever is best
+  for the job. The site loads plain images.
 - Art assets are placeholders until late — build and verify against flat blocks so nothing
   blocks on image generation. Every generation prompt lives in [docs/PROMPTS.md](docs/PROMPTS.md);
   regenerate from there, never from memory.
 - **The day image locks geometry.** Hotspot rectangles and the depth map derive from it,
   and every other variant (night, seasons) is an _edit_ of a locked image so registration
   holds. Anything that glows at night must already exist, unlit, in the day image.
-- **Art lives in two places.** `art/` holds untouched generator masters — committed, never
-  served. `public/art/` holds what the site loads: WebP, resized, plus depth maps. Naming
-  and the full asset ladder are in docs/PROMPTS.md.
+- **Art lives in two places.** `art/` holds untouched generator masters plus everything
+  derived from them (depth, layer masks, inpainted plates) — committed, never served.
+  `public/art/` holds what the site loads: WebP, resized, plus depth maps. Naming and the
+  full asset ladder are in docs/PROMPTS.md; the derivation steps are in docs/PIPELINE.md.
+- **The room renders as a layered depth image, not one displaced mesh.** The interior is
+  cut by depth into `far` / `mid` / `near`, the surface behind each layer is inpainted
+  offline with LaMa, and the layers draw back to front. A single mesh smears at every
+  silhouette and no parameter setting avoids it — lateral motion is simultaneously the only
+  source of real parallax and the only source of disocclusion.
 - **Hotspot rectangles are mapped by eye, once, against the day master**, using the
   `map-hotspots` skill, and stored in `src/data/hotspots.ts` in normalised 0–1
   coordinates. No object detector — these props are in no dataset, there are eight of

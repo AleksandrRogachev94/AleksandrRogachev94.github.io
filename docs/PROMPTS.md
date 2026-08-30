@@ -22,6 +22,12 @@ interior is identical across all variants so one depth map serves everything.
 push travels ~70% into the frame, so the image is magnified well past native exactly when
 the viewer is closest. A 1024px-wide render goes visibly soft at the end of the push.
 
+Resolution buys sharpness and *nothing else* — it does not reduce the smearing at object
+silhouettes, which is geometric. A 4K master gives sharper smears. Because a fresh 4K
+render drifts geometry it replaces the locked master rather than upgrading it, so iterate
+composition cheaply at low resolution and buy 4K once, after the composition is locked.
+[PIPELINE.md](PIPELINE.md) has the full ordering.
+
 **5. No readable text anywhere, ever.** Image models garble it, and the paper note is a
 hotspot whose label is rendered by the site, not painted in.
 
@@ -58,13 +64,18 @@ suffixes for derived assets:
 | `-depth`  | depth map, same dimensions as its colour art | `room-day-summer-depth.webp` |
 | `window-` | window region cropped from a seasonal edit   | `window-winter.webp`         |
 | `close-`  | fill-frame close-up plate for one hotspot    | `close-monitor.webp`         |
+| `-far`, `-mid`, `-near` | one depth layer; `mid`/`near` carry alpha | `room-day-summer-mid.webp` |
+| `-mask-`  | authored layer mask, `art/` only, never served | `room-day-summer-mask-near.png` |
 
 Hotspot rectangles are **not** files — they live in `src/data/hotspots.ts` in normalised
 0–1 coordinates, so re-exporting the art at a different size does not invalidate them.
 They are mapped once against the day master with the `map-hotspots` skill, and because
 every variant is a pixel-registered edit of that master, one set of rects serves all six.
 
-## Depth
+## Depth and layers
+
+The mechanics — filtering, masking, inpainting, export — live in
+[PIPELINE.md](PIPELINE.md). What follows is only what constrains *generation*.
 
 One depth map serves every variant, because the interior is identical across all of them.
 Produce it once, from A, and never per-variant.
@@ -91,11 +102,18 @@ Flat is fine for the yard quad. If the feeder ever needs to parallax against the
 hand-author a gradient for it — do not go back to the depth model, and do not let the yard's
 range grow. A large depth step at the window edge is what tears a displaced mesh.
 
-Two consequences worth remembering: the window and feeder **hotspot rects live in yard-layer
-space** and must take the yard quad's parallax offset, not the room's; and Depth Anything's
-output for the interior is a starting point, not a deliverable — expect to hand-correct the
-cropped foreground plant and the dracaena fronds (thin foliage reads far), and to flatten the
-poster and the guitar back onto the wall plane.
+One consequence worth remembering: the window and feeder **hotspot rects live in yard-layer
+space** and must take the yard quad's parallax offset, not the room's.
+
+**The interior depth came back clean on the first run** — foreground plant, cabinet, desk,
+chair and floor recession all separate correctly. No hand-editing of depth values is
+planned; if a push reveals tearing, fix what visibly breaks and nothing else.
+
+Beyond the yard, the interior is cut into **three depth layers** (`far` / `mid` / `near`)
+with the surface behind each one inpainted offline, so that sliding the camera reveals real
+painted floor instead of stretched pixels. That cut is by *depth*, never by object, and it
+needs nothing from the generator — it is derived entirely from the locked master. Details
+in [PIPELINE.md](PIPELINE.md).
 
 ---
 
