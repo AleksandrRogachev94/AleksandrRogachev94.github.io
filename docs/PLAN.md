@@ -106,7 +106,7 @@ each and composited behind the window plane. Six images total. **All prompts liv
 [PROMPTS.md](PROMPTS.md).**
 
 Anything that glows at night must already exist in the day image, unlit — the fairy lights
-along the shelf and the floor lamp by the dracaena. Introducing an object at night would
+along the shelf and the floor lamp by the rubber plant. Introducing an object at night would
 break the shared geometry.
 
 ## Art direction
@@ -173,12 +173,19 @@ true parallax, correct perspective, continuous, and **interruptible mid-move**.
 - **A single displaced mesh smears at every silhouette, and no parameter escapes it.**
   Lateral motion is the only motion that produces real parallax and the only one that
   produces disocclusion — the same motion, so the effect and the artifact cannot be
-  separated by tuning. The fix is a **layered depth image**: the interior is cut by depth
-  into `far` / `mid` / `near`, the surface behind each layer is inpainted offline with
-  LaMa, and the renderer draws them back to front. Sliding the camera then reveals real
-  painted floor instead of stretched pixels. Cut by depth, never by object — props at the
-  same depth have no relative parallax and need nothing. Process in
+  separated by tuning. The fix is a **layered depth image**: objects that occlude one
+  another are cut apart with SAM, the surface behind each is inpainted offline with LaMa,
+  and the renderer draws them back to front. Sliding the camera then reveals real painted
+  floor instead of stretched pixels. **Layers follow occlusion, not depth values** — every
+  layer is itself a displaced mesh, so one layer carries many depths, and the shell is one
+  continuous surface that is never cut. Layers are occlusion rank, not depth range — what
+  earns a cut is hiding something, not being far away. Three ranks here: the shell, then
+  furniture and wall-mounted things, then what stands on them. Process in
   [PIPELINE.md](PIPELINE.md).
+- **The depth model gets some objects semantically wrong**, and no segmentation can detect
+  that. The office chair comes back at the same distance as the desk it sits in front of,
+  and the corner plant reads as further away than the wall behind it. A short list of authored
+  corrections in `art/objects.json` fixes what visibly breaks, and nothing else.
 - **Layers enlarge the excursion budget; they do not remove it.** Ambient parallax stays
   small, and the push still travels ~70% of the way and **cross-fades to a dedicated
   close-up** for final detail. A mesh cannot deliver the arrival at any resolution — the
@@ -273,7 +280,8 @@ portfolio/
   src/scripts/stage.ts           one-live-element manager
   src/scripts/detections.ts      BirdLense box overlay from JSON
   src/styles/tokens.css          warm room palette + dark focus palette + accents
-  art/                           masters, committed, never served
+  art/                           master + objects.json + hand masks/fills, committed
+  art/build/                     everything derived from them, gitignored
   public/art/room-{day,night}-{season}.webp
   public/art/room-day-summer-depth.webp   one depth map serves every variant
   public/art/window-{spring,autumn,winter}.webp

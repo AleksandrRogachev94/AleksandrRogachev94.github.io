@@ -25,7 +25,8 @@ import '../../styles/tokens.css';
       <label>edge cut <input type="range" id="edgeCut" min="0.02" max="1" step="0.01" value="1" /><output id="edgeCutOut">1.00</output></label>
       <label>parallax <input type="range" id="parallax" min="0" max="0.12" step="0.002" value="0.02" /><output id="parallaxOut">0.020</output></label>
       <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="0.25" /><output id="lateralOut">0.25</output></label>
-      <p class="hint">click a prop to push into it · Esc pulls back · drag to look around · wheel to dolly</p>
+      <label>solo <input type="range" id="solo" min="-1" max="2" step="1" value="-1" /><output id="soloOut">all</output></label>
+      <p class="hint">click a prop to push into it · Esc pulls back · wheel to dolly · solo isolates one layer</p>
     </aside>
 
     <style>
@@ -49,8 +50,14 @@ import '../../styles/tokens.css';
     <script>
       import { createRoomRenderer } from '../../scripts/roomRenderer';
 
-      const COLOR = '/art/room-day-summer.webp';
-      const DEPTH = '/art/room-day-summer-depth.webp';
+      // Back to front. The shell first, then furniture, then what stands on furniture.
+      const S = '/art/room-day-summer';
+      const LAYERS = [0, 1, 2].map((i) => ({
+        colorSrc: `${S}-layer${i}.webp`,
+        depthSrc: `${S}-layer${i}-depth.webp`,
+      }));
+      // Picking needs one depth map covering the whole frame; the per-layer ones are cut.
+      const DEPTH = `${S}-depth.webp`;
 
       const canvas = document.getElementById('room') as HTMLCanvasElement;
       const status = document.getElementById('status')!;
@@ -76,7 +83,9 @@ import '../../styles/tokens.css';
         };
       }
 
-      const renderer = await createRoomRenderer({ canvas, colorSrc: COLOR, depthSrc: DEPTH });
+      // ?grid=512 to trade geometric detail for framerate without editing code.
+      const gridCols = Number(new URLSearchParams(location.search).get('grid')) || undefined;
+      const renderer = await createRoomRenderer({ canvas, layers: LAYERS, gridCols });
       if (!renderer) {
         status.textContent = 'no webgl2 — the site would show the static image here';
       } else {
@@ -84,6 +93,14 @@ import '../../styles/tokens.css';
         const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
         let nearZ = 1.0, farZ = 6.0, fovDeg = 42, travel = 0.55, parallax = 0.02, lateral = 0.25;
+        // Both of these are properties of the plates on disk, so they move with the
+        // master. They were left at 1024/64 after the master went to 5504px, which made
+        // the readout below under-report every excursion by 5.4x - the harness said
+        // "60px / 64px, fine" while the camera was actually asking for 322px of painted
+        // band that does not exist. Mirror tools/inpaint.py, which now scales --margin
+        // with the plate (64px at its 1024px reference).
+        const PLATE_W = 5504, PLATE_H = 3072;
+        const MARGIN_PX = 344;
         let pointer = { x: 0, y: 0 };      // -1..1, drives the ambient parallax
         let dolly = 0;                      // wheel offset along -Z
         let target: [number, number, number] | null = null;   // the 3D point being pushed into
@@ -115,17 +132,33 @@ import '../../styles/tokens.css';
 
         canvas.addEventListener('click', (e) => {
           target = unproject(e.clientX, e.clientY);
-          status.textContent = `push -> [${target.map((n) => n.toFixed(2)).join(', ')}]`;
         });
 
         addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') { target = null; status.textContent = 'home'; }
+          if (e.key === 'Escape') target = null;
         });
 
         canvas.addEventListener('wheel', (e) => {
           e.preventDefault();
           dolly = Math.min(1.5, Math.max(-1.5, dolly - e.deltaY * 0.002));
         }, { passive: false });
+
+        /**
+         * Sideways camera motion is the only thing that uncovers painted background, so
+         * it is the only thing the offline `--margin` has to cover. A point at depth z
+         * shifts by (e / z) / (tanHalf * aspect) in ndc when the eye moves by e, so the
+         * *disocclusion* — near surface against far background — is the difference of
+         * that across the depth range. Reported in plate pixels, which is the unit
+         * --margin is stated in, so the two numbers are directly comparable.
+         */
+        function excursionPx(): number {
+          const e = Math.hypot(cameraOffsetX(), cameraOffsetY());
+          const tanHalf = Math.tan((fovDeg * Math.PI) / 180 / 2);
+          const aspect = PLATE_W / PLATE_H;
+          return (e * (1 / nearZ - 1 / farZ) / (tanHalf * aspect)) * (PLATE_W / 2);
+        }
+        const cameraOffsetX = () => renderer!.camera.eye[0] - renderer!.home.eye[0];
+        const cameraOffsetY = () => renderer!.camera.eye[1] - renderer!.home.eye[1];
 
         function tick() {
           // Ease toward or away from the push target. Because this reads a mutable
@@ -158,6 +191,11 @@ import '../../styles/tokens.css';
             cam.eye = home;
             cam.center = [home[0], home[1], home[2] - 1];
           }
+          const reveal = excursionPx();
+          const over = reveal > MARGIN_PX;
+          status.textContent = `${target ? 'push' : 'home'} · excursion `
+            + `${reveal.toFixed(0)}px / ${MARGIN_PX}px${over ? ' OVER BUDGET' : ''}`;
+          status.style.color = over ? '#ff6b6b' : '';
           requestAnimationFrame(tick);
         }
 
@@ -173,6 +211,9 @@ import '../../styles/tokens.css';
         bind('edgeCut', (v) => { renderer.setEdgeCut(v); });
         bind('parallax', (v) => { parallax = v; }, (v) => v.toFixed(3));
         bind('lateral', (v) => { lateral = v; });
+        // Isolating a layer is how you tell a bad mask from a bad fill: a hole in the
+        // shell is a mask that missed, a smear inside one layer is a layer that is missing.
+        bind('solo', (v) => { renderer.setSoloLayer(v); }, (v) => (v < 0 ? 'all' : `L${v}`));
 
         status.textContent = 'home';
         renderer.start();

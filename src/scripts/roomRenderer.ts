@@ -1,5 +1,6 @@
 /**
- * The room, drawn as a depth-displaced mesh so the camera can move through it in real 3D.
+ * The room, drawn as a stack of depth-displaced meshes so the camera can move through it
+ * in real 3D.
  *
  * The idea in one paragraph: we know what the room looks like from exactly one viewpoint
  * (the art) and roughly how far away every pixel is (the depth map). That is enough to
@@ -14,16 +15,40 @@
  * barely shifts, which is the entire difference between "zooming a photo" and "moving
  * through a room".
  *
- * Deliberately not Three.js: this is one quad, one draw call, two textures and a 4x4
- * matrix. See CLAUDE.md.
+ * **Why a stack and not one mesh.** One mesh has a triangle bridging every silhouette —
+ * chair to floor, printer to window — and the moment the camera moves sideways those
+ * triangles stretch into smears. The smear is not a bug in the parameters: lateral motion
+ * is simultaneously the only source of real parallax and the only thing that uncovers
+ * surface the art never painted. You cannot have one without the other. So the art is cut
+ * offline into layers, the surface behind each one is painted in, and each layer becomes
+ * its own displaced mesh with its own colour, depth and alpha. Drawn back to front, a
+ * moving camera reveals painted background instead of stretched foreground.
+ *
+ * Layers are **occlusion rank**, not depth range: layer N is "hides something in layer
+ * N-1". The 3D printer reads *farther* than the cabinet it stands on, so grouping by
+ * depth value would put them in one layer and smear across the join. See docs/PIPELINE.md.
+ *
+ * The renderer takes the layers as given and must not exceed the excursion budget they
+ * were painted for (`--margin` in tools/inpaint.py, which scales with the plate: 64px at
+ * its 1024px reference, so 344px on the 5504px master). Move further than
+ * that and the camera reaches past the painted band to a hard alpha edge.
+ *
+ * Deliberately not Three.js: this is one quad grid, three draw calls, six textures and a
+ * 4x4 matrix. See CLAUDE.md.
  */
 
 import { lookAt, mat4, multiply, perspective, type Mat4, type Vec3 } from './mat4';
 
-export interface RoomRendererOptions {
-  canvas: HTMLCanvasElement;
+/** One layer's plates. Colour carries alpha; layer 0's is opaque and may be RGB. */
+export interface RoomLayerSource {
   colorSrc: string;
   depthSrc: string;
+}
+
+export interface RoomRendererOptions {
+  canvas: HTMLCanvasElement;
+  /** Back to front. Index 0 is the shell — opaque, uncut, and never absent. */
+  layers: RoomLayerSource[];
   /** Vertical field of view, degrees. Also the lens the art is assumed to have been shot with. */
   fovDeg?: number;
   /** World-space distance of the *nearest* content (disparity 1.0). */
@@ -31,9 +56,12 @@ export interface RoomRendererOptions {
   /** World-space distance of the *farthest* content (disparity 0.0). */
   farZ?: number;
   /**
-   * Mesh columns; rows follow from the image aspect. This is the resolution at which
-   * silhouettes are cut, so too low reads as wobbly, stair-stepped object outlines.
-   * One draw call either way — 512 is ~290k triangles, which is nothing for a GPU.
+   * Mesh columns; rows follow from the image aspect. This is the resolution the room's
+   * *geometry* is sampled at, and it is the first thing to raise if a push looks melted:
+   * a grid coarser than the art means the camera magnifies triangles, not detail. One
+   * vertex per texel of the master is the useful ceiling — finer cannot resolve more.
+   * Three draw calls either way, but the vertex count is per layer, so this is the main
+   * cost dial on weak GPUs.
    */
   gridCols?: number;
   /**
@@ -60,10 +88,14 @@ export interface RoomRenderer {
   setFov(fovDeg: number): void;
   /**
    * Threshold on the per-quad depth jump above which geometry is discarded instead of
-   * drawn. 1.0 draws everything (stretched triangles smear across disocclusions); lower
-   * values cut them, leaving holes. Holes or smears — pick your poison per scene.
+   * drawn. 1.0 draws everything. Cutting layers offline is what removes the smears this
+   * used to fight, so it now defaults to off and stays only as a diagnostic — if it has
+   * to be turned down to make a scene look right, a layer is missing from objects.json.
    */
   setEdgeCut(threshold: number): void;
+  /** Draw only layer `i`, or all of them again with -1. Diagnostic. */
+  setSoloLayer(index: number): void;
+  readonly layerCount: number;
   start(): void;
   stop(): void;
   destroy(): void;
@@ -102,9 +134,9 @@ void main() {
                     ndc.y * uTanHalfFov,
                     -1.0) * z;
 
-  // How much does depth jump across one quad from here? A triangle spanning a silhouette
-  // (chair against floor, feeder against fence) has a large value; a flat surface has
-  // almost none. This is the signal that identifies the rubber-sheet triangles.
+  // How much does depth jump across one quad from here? Within a layer this should now
+  // be small everywhere — that is what the offline cut buys — so it survives as a
+  // diagnostic rather than as the fix it once had to be.
   float dx = texture(uDepth, aUv + vec2(uGridStep.x, 0.0)).r - disparity;
   float dy = texture(uDepth, aUv + vec2(0.0, uGridStep.y)).r - disparity;
   vStretch = max(abs(dx), abs(dy));
@@ -118,13 +150,23 @@ precision highp float;
 in vec2 vUv;
 in float vStretch;
 uniform sampler2D uColor;
-uniform float uEdgeCut;   // 1.0 = draw everything (smears); lower = cut the stretch
+uniform float uEdgeCut;    // 1.0 = draw everything; lower = cut on depth jump
+uniform float uAlphaCut;   // below this a fragment is not drawn at all
 out vec4 outColor;
 void main() {
-  // Discard, rather than fade: a half-transparent smear still reads as a smear, and
-  // blending would need back-to-front sorting we do not have.
   if (vStretch > uEdgeCut) discard;
-  outColor = vec4(texture(uColor, vUv).rgb, 1.0);
+  vec4 c = texture(uColor, vUv);
+  // Blend the edge, don't cut it. The plates now carry hard 0/255 alpha, so LINEAR
+  // filtering turns each silhouette into a ramp exactly one texel wide — and since the
+  // canvas is always larger than the 1024px plate, every silhouette is magnified and a
+  // binary cut shows as a visible staircase. Sampling the ramp instead is free
+  // antialiasing at the one moment it is needed.
+  //
+  // The threshold survives only to keep fully-empty fragments from writing depth. It has
+  // to stay low: it is no longer choosing where the silhouette is, and raising it back
+  // toward 0.5 just reinstates the staircase.
+  if (c.a < uAlphaCut) discard;
+  outColor = vec4(c.rgb, c.a);
 }`;
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -190,18 +232,25 @@ function buildGrid(cols: number, rows: number, overscan: number) {
  * static image in place — degrade explicitly, never silently (CLAUDE.md).
  */
 export async function createRoomRenderer(opts: RoomRendererOptions): Promise<RoomRenderer | null> {
-  const { canvas, colorSrc, depthSrc } = opts;
+  const { canvas } = opts;
+  if (opts.layers.length === 0) throw new Error('roomRenderer: no layers');
   let fovY = ((opts.fovDeg ?? 42) * Math.PI) / 180;
   let nearZ = opts.nearZ ?? 1.0;
   let farZ = opts.farZ ?? 6.0;
-  const cols = opts.gridCols ?? 512;
-  const overscan = opts.overscan ?? 0.06;
+  const cols = opts.gridCols ?? 1024;
+  // 0.06 was not enough: a deep push with any lateral component walked the camera off
+  // the mesh and showed the void as a black wedge down one side of the frame.
+  const overscan = opts.overscan ?? 0.18;
 
   const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, depth: true });
   if (!gl) return null;
 
-  const [colorImg, depthImg] = await Promise.all([loadImage(colorSrc), loadImage(depthSrc)]);
-  const imageAspect = colorImg.naturalWidth / colorImg.naturalHeight;
+  const images = await Promise.all(
+    opts.layers.map((l) => Promise.all([loadImage(l.colorSrc), loadImage(l.depthSrc)])),
+  );
+  // The shell fixes the frame; every other plate is a cut-out of the same master and is
+  // required to match it, so a mismatch is an export bug worth failing loudly on.
+  const imageAspect = images[0][0].naturalWidth / images[0][0].naturalHeight;
   const rows = Math.max(2, Math.round(cols / imageAspect));
 
   const program = gl.createProgram()!;
@@ -228,8 +277,12 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
 
   // flipY so uv (0,0) is the bottom-left of the image, matching NDC's y-up.
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-  const colorTex = texture(gl, colorImg, true);
-  const depthTex = texture(gl, depthImg, false);
+  // Alpha stays straight, not premultiplied, to match the classic blend func below.
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  const textures = images.map(([c, d]) => ({
+    color: texture(gl, c, true),
+    depth: texture(gl, d, false),
+  }));
 
   const u = {
     color: gl.getUniformLocation(program, 'uColor'),
@@ -241,6 +294,7 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     viewProj: gl.getUniformLocation(program, 'uViewProj'),
     gridStep: gl.getUniformLocation(program, 'uGridStep'),
     edgeCut: gl.getUniformLocation(program, 'uEdgeCut'),
+    alphaCut: gl.getUniformLocation(program, 'uAlphaCut'),
   };
   gl.uniform1i(u.color, 0);
   gl.uniform1i(u.depth, 1);
@@ -250,10 +304,19 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
   gl.uniform1f(u.invFar, 1 / farZ);
   const span = 1 + 2 * overscan;
   gl.uniform2f(u.gridStep, span / (cols - 1), span / (rows - 1));
-  gl.uniform1f(u.edgeCut, 1.0);   // everything drawn until a caller says otherwise
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, colorTex);
-  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, depthTex);
+  gl.uniform1f(u.edgeCut, 1.0);
+  gl.uniform1f(u.alphaCut, 0.05);
   gl.enable(gl.DEPTH_TEST);
+  // Back to front, so ordinary source-over blending is already in the right order and no
+  // per-fragment sorting is needed. Depth testing still earns its keep *within* a layer,
+  // where an off-axis camera can fold a displaced heightfield over itself — but the
+  // depth buffer is cleared between layers, because it must never arbitrate BETWEEN
+  // them. Layers are occlusion rank precisely because depth values give the wrong
+  // order: the printer reads farther than the cabinet it stands on, so letting its
+  // fragments z-test against the cabinet's fill punches the fill through the printer.
+  // Measured at 6% of the frame before the per-layer clear.
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
   // Home is the reference viewpoint: origin, looking down -Z. At exactly this position
   // the mesh reprojects to the original artwork, pixel for pixel.
@@ -267,6 +330,7 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
 
   let raf = 0;
   let running = false;
+  let solo = -1;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -296,7 +360,14 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
 
     gl!.clearColor(0, 0, 0, 1);
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
-    gl!.drawElements(gl!.TRIANGLES, indices.length, gl!.UNSIGNED_INT, 0);
+    for (let i = 0; i < textures.length; i++) {
+      if (solo >= 0 && solo !== i) continue;
+      // Painter's order decides what covers what across layers; z only within one.
+      gl!.clear(gl!.DEPTH_BUFFER_BIT);
+      gl!.activeTexture(gl!.TEXTURE0); gl!.bindTexture(gl!.TEXTURE_2D, textures[i].color);
+      gl!.activeTexture(gl!.TEXTURE1); gl!.bindTexture(gl!.TEXTURE_2D, textures[i].depth);
+      gl!.drawElements(gl!.TRIANGLES, indices.length, gl!.UNSIGNED_INT, 0);
+    }
 
     if (running) raf = requestAnimationFrame(frame);
   }
@@ -323,6 +394,7 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     camera,
     home,
     canvas,
+    layerCount: textures.length,
     setDepthRange(n, f) {
       nearZ = n; farZ = f;
       gl!.uniform1f(u.invNear, 1 / nearZ);
@@ -335,13 +407,18 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     setEdgeCut(threshold) {
       gl!.uniform1f(u.edgeCut, threshold);
     },
+    setSoloLayer(index) {
+      solo = index;
+    },
     start,
     stop,
     destroy() {
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
-      gl!.deleteTexture(colorTex);
-      gl!.deleteTexture(depthTex);
+      for (const t of textures) {
+        gl!.deleteTexture(t.color);
+        gl!.deleteTexture(t.depth);
+      }
       gl!.deleteBuffer(vbo);
       gl!.deleteBuffer(ibo);
       gl!.deleteVertexArray(vao);

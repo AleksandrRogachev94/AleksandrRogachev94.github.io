@@ -1,0 +1,321 @@
+{
+  "_comment": [
+    "Objects that OCCLUDE something. Each needs a mask so the mesh can be cut at its",
+    "silhouette and the surface behind it inpainted. Anything that hides nothing needs no",
+    "entry - the poster is flat on the wall, the keyboard lies on the desk and travels",
+    "inside the desk's own mask.",
+    "",
+    "  in_front_of  what this object hides. THIS is what decides layers, not depth values.",
+    "               A 3D printer standing at the back of a cabinet top reads FARTHER than",
+    "               the cabinet under it, so any grouping by depth puts them in one layer,",
+    "               leaves no cut between them, and smears across the join. Standing-on is a",
+    "               fact about the room, so it is stated once here rather than inferred.",
+    "               tools/assign.py ranks the graph and cross-checks it against the depth.",
+    "  box          drag one in pick.py. The STRONGEST prompt - start here for anything",
+    "               large or cluttered. Then negatives for what the box wrongly swallows.",
+    "  points / negative  SAM click prompts. For small objects and for carving one thing",
+    "               out of a group.",
+    "  polygons     raster fallback, where SAM has no single object to grab.",
+    "  open_frame   the object is genuinely see-through in places, so enclosed holes in its",
+    "               mask are real background and are kept, and the boundary is re-cut by an",
+    "               alpha matting model. Everywhere else an enclosed hole is a segmentation",
+    "               defect whose pixels belong to the object.",
+    "  op           OPTIONAL depth correction, only where monocular depth is semantically",
+    "               wrong. All are RELIEF-PRESERVING - they move an object, never flatten it",
+    "               to one number. stand = shift so it sits on the floor beneath it |",
+    "               flatten = compress relief toward the median by `relief` (default 0.25) |",
+    "               fill = harmonic interpolation from the border, written only outside",
+    "               other masks.",
+    "",
+    "SEEDED, NOT PICKED. Every entry below carries its occlusion graph but no coordinates,",
+    "because those are properties of one master and the master was replaced. Open each in",
+    "tools/pick.py, prompt it, and save. segment.py refuses any entry still unprompted.",
+    "Coordinates are normalised 0-1 so they survive re-export at another size.",
+    "Disparity convention: near = high, far = low. See art/README.md."
+  ],
+  "objects": [
+    {
+      "name": "fg-plant",
+      "why": "Cropped foreground prop, nearest thing to the camera and the largest disocclusion in the frame - it hides floor, skirting and the cabinet's left end - which is why it is `in_front_of` the cabinet as well as the shell. Listing only the shell left the two in ONE layer with a 103-level step between them, the largest cliff in the scene, and 11,385px of shared silhouette for the mesh to bridge: the leaf edges came back as a sawtooth of stretched foreground. Include the terracotta pot: prompted on foliage alone, SAM returns the leaves and leaves the pot standing in the empty room. Flattened: the mask's own disparity spans 59/255 from front leaf to back leaf, as large as the 51-level step to the shell behind it, so at the parallax the fig actually gets its leaves shear against each other as hard as the whole plant shears against the room. It is a cropped foreground card - internal relief buys nothing here and costs the worst tearing in the frame. 0.25 leaves 15 levels, at the ~13 where parallax falls to a single pixel.",
+      "open_frame": true,
+      "in_front_of": [
+        "shell",
+        "cabinet"
+      ],
+      "box": [
+        0,
+        0.2865,
+        0.3058,
+        0.9915
+      ],
+      "negative": [
+        [
+          0.0958,
+          0.9068
+        ]
+      ],
+      "op": "flatten",
+      "relief": 0.25
+    },
+    {
+      "name": "cabinet",
+      "why": "Furniture. Hides floor and the lower back wall; everything on its top hides it in turn. Box it - a white slab carrying a printer, a robot and a speaker is the case points are worst at.",
+      "in_front_of": [
+        "shell"
+      ],
+      "box": [
+        0.1312,
+        0.633,
+        0.4644,
+        0.937
+      ],
+      "negative": [
+        [
+          0.4321,
+          0.6541
+        ],
+        [
+          0.225,
+          0.6958
+        ],
+        [
+          0.3446,
+          0.6577
+        ],
+        [
+          0.2336,
+          0.6979
+        ]
+      ]
+    },
+    {
+      "name": "speaker",
+      "why": "Stands on the cabinet top and hides it. Was named record-player while the art carried one; the prompt now asks for a bluetooth speaker. See the open question in docs/PLAN.md.",
+      "in_front_of": [
+        "cabinet"
+      ],
+      "box": [
+        0.1569,
+        0.6643,
+        0.2129,
+        0.7754
+      ]
+    },
+    {
+      "name": "3d-printer",
+      "why": "Open frame against a blown-out window, so it reads far while the cabinet under it reads near - depth alone groups it with the wrong surface. Negatives keep the window out of the mask.",
+      "open_frame": true,
+      "in_front_of": [
+        "cabinet"
+      ],
+      "points": [
+        [
+          0.292,
+          0.6933
+        ],
+        [
+          0.3367,
+          0.6894
+        ],
+        [
+          0.2422,
+          0.6963
+        ]
+      ],
+      "box": [
+        0.2297,
+        0.4664,
+        0.3716,
+        0.7759
+      ],
+      "negative": [
+        [
+          0.309,
+          0.6753
+        ]
+      ]
+    },
+    {
+      "name": "robot",
+      "why": "Round chassis on the cabinet top, hides it.",
+      "in_front_of": [
+        "cabinet"
+      ],
+      "box": [
+        0.3505,
+        0.6089,
+        0.4374,
+        0.7208
+      ]
+    },
+    {
+      "name": "rubber-plant",
+      "why": "Broad solid leaves against a bright window. Negatives split it from anything trailing off the shelf above, which SAM merges with it on colour. Carried op `stand` from the PREVIOUS master, where it came back behind the back wall. This master does not: measured 77 against 79 for the floor under its pot, so the correction moved it 2 levels. Deleted. Re-measure before re-adding - an op is a claim about one master.",
+      "open_frame": true,
+      "in_front_of": [
+        "shell",
+        "cabinet"
+      ],
+      "box": [
+        0.4385,
+        0.4117,
+        0.5144,
+        0.8324
+      ]
+    },
+    {
+      "name": "floor-lamp",
+      "why": "Slim stem crossing the wall corner, now carrying a drum shade. The shade is a big simple silhouette and easy; the stem is thin and needs negatives on both sides to stop the mask leaking into the wall.",
+      "in_front_of": [
+        "shell"
+      ],
+      "box": [
+        0.485,
+        0.285,
+        0.5715,
+        0.8421
+      ]
+    },
+    {
+      "name": "desk",
+      "why": "Furniture. Hides floor and the alcove wall; the monitors and lamp on it hide the desk in turn. HAND-PAINTED, not SAM. A slab under a keyboard, a mouse, headphones and a mug, with an epoxy river down its length that SAM reads as a separate object and a live edge no box follows - points, boxes and polygons were all tried and all left stranded islands. Everything LYING on the desk belongs inside this mask: it hides nothing behind itself and must travel with the desk.",
+      "in_front_of": [
+        "shell"
+      ],
+      "mask": "art/masks-manual/desk.png"
+    },
+    {
+      "name": "monitor-left",
+      "why": "Stands on the desk and hides it, and hides alcove wall behind it at a very different distance.",
+      "in_front_of": [
+        "desk"
+      ],
+      "box": [
+        0.7079,
+        0.4038,
+        0.9005,
+        0.6212
+      ]
+    },
+    {
+      "name": "monitor-right",
+      "why": "Separate panel from the left monitor - the prompt now asks for a visible gap of wall between them so they do not merge into one silhouette.",
+      "in_front_of": [
+        "desk"
+      ],
+      "box": [
+        0.8856,
+        0.3708,
+        0.9731,
+        0.6494
+      ]
+    },
+    {
+      "name": "desk-lamp",
+      "why": "Stands on the desk, hides desk surface and the wall behind.",
+      "in_front_of": [
+        "desk"
+      ],
+      "box": [
+        0.6814,
+        0.4346,
+        0.7273,
+        0.5917
+      ],
+      "negative": [
+        [
+          0.7138,
+          0.582
+        ],
+        [
+          0.7047,
+          0.5651
+        ]
+      ]
+    },
+    {
+      "name": "office-chair",
+      "why": "Sits in front of the desk and hides it. Carried op `stand` from the PREVIOUS master, where it came back at the desk's own distance. Measured on this one: chair 97, floor under the castors 103 - a 6-level shift where the threshold for a correction worth making is ~13. Deleted. Re-measure before re-adding.",
+      "in_front_of": [
+        "desk"
+      ],
+      "points": [
+        [
+          0.7279,
+          0.6561
+        ],
+        [
+          0.7689,
+          0.8111
+        ],
+        [
+          0.7068,
+          0.5806
+        ],
+        [
+          0.7203,
+          0.8747
+        ]
+      ],
+      "box": [
+        0.6555,
+        0.5373,
+        0.8015,
+        0.9608
+      ]
+    },
+    {
+      "name": "wall-shelf",
+      "why": "Shelf, books and a trailing plant standing off the wall. Carried op `flatten` from the PREVIOUS master, whose mask came back bimodal - board at 48-63, vine at 128-143 - so the vine read 85 levels in FRONT of the shelf it hangs from and the leaves swam. This master does not do that: the whole mask spans 9 levels, 70 to 79. Flattening it to 2 was deleting relief to cure a disease it does not have. Deleted. Re-measure before re-adding.",
+      "in_front_of": [
+        "shell"
+      ],
+      "box": [
+        0.6786,
+        0.2156,
+        0.8566,
+        0.4201
+      ]
+    },
+    {
+      "name": "guitar",
+      "why": "Hangs off the alcove wall. Shallow, but a clean silhouette against flat paint. Positives alone leak down the wall, so fence it with negatives on all four sides.",
+      "in_front_of": [
+        "shell"
+      ],
+      "box": [
+        0.6116,
+        0.1635,
+        0.6619,
+        0.5104
+      ]
+    },
+    {
+      "name": "window-glass",
+      "why": "Monocular depth is SUPPOSED to read glass as one flat surface - that behaviour is what stops robots walking into windows - but on this master it looked straight through. The glass comes back bimodal: 58% of it at 32-39, the yard, against mullions and wall at 81. A 48-level cliff at every glazing bar, over 19% of the frame, inside the one mesh that is never cut - so it does not slide the yard behind the frame, it stretches triangles across the bars, over the brightest part of the picture. Real window parallax needs the yard as its own layer behind the frame, which the seasonal swap wants anyway. Until then, fill from the border so the window returns as the receding wall plane. The yard is a separate quad; it is never inferred. Polygons rather than SAM because there is no single object here to grab. Part of the shell, so it is never cut out as a layer. The fill is written only outside other masks: the foreground plant, the printer and the rubber plant stand inside this rectangle.",
+      "op": "fill",
+      "shell": true,
+      "in_front_of": [],
+      "polygons": [
+        [
+          [
+            0.048,
+            0.0
+          ],
+          [
+            0.412,
+            0.048
+          ],
+          [
+            0.412,
+            0.632
+          ],
+          [
+            0.048,
+            0.72
+          ]
+        ]
+      ]
+    }
+  ]
+}

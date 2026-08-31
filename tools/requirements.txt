@@ -1,0 +1,21 @@
+# Offline art tooling only. Never enters package.json — the site ships plain images.
+# See docs/PIPELINE.md.
+numpy==2.5.2
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+
+# Stages 0 and 2. Every model now comes through transformers and caches to
+# ~/.cache/huggingface on first run: Depth Anything V2 (depth), SAM 2.1 (segmentation),
+# ViTMatte (see-through boundaries). Depth Anything V3 is not in this pipeline yet and
+# needs ByteDance's own depth_anything_3 package - see tools/depth.py.
+#
+# `segment-anything-py` was here for SAM 1 and is gone: transformers carries SAM 1, SAM 2
+transformers==5.16.1
+torch==2.13.0
+torchvision==0.28.0
+
+# Stage 5's inpainter, LaMa, is NOT in this file on purpose: it must be installed with
+# --no-deps, and pip has no per-requirement --no-deps. It pins an old Pillow that will not
+# build on Python 3.13, and every dependency it actually needs (torch, pillow, numpy,
+# opencv) is already above. So it is a second command, and docs/SCENE.md lists both:
+#   tools/.venv/bin/pip install --no-deps simple-lama-inpainting==0.1.2

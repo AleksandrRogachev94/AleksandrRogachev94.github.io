@@ -24,3 +24,11 @@ pnpm-debug.log*
 .idea/
 
 .DS_Store
+
+# offline art tooling (see docs/PIPELINE.md)
+tools/.venv/
+tools/__pycache__/
+
+# everything tools/ derives from the master (see docs/SCENE.md).
+# art/ itself keeps only the four authored inputs; art/build/ regenerates from them.
+art/build/
