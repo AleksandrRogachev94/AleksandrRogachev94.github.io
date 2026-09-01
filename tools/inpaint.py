@@ -121,7 +121,7 @@ def matte(bgr, under, mask, band_out, trust):
     return alpha, out.astype(np.uint8)
 
 
-def lama_fill(lama, bgr, hole, max_side=2048):
+def lama_fill(lama, bgr, hole, max_side=2048, reach=None):
     """Inpaint `hole` and composite, so pixels outside the hole are bit-identical.
 
     The model returns a whole frame and re-encodes all of it. Registration against the
@@ -130,17 +130,49 @@ def lama_fill(lama, bgr, hole, max_side=2048):
 
     `max_side` caps what the model sees. LaMa re-encodes the entire frame, so cost scales
     with the master, not with the hole: at 5504x3072 it was killed by the OS (exit 137)
-    before writing anything. Downscaling costs little here for two reasons. LaMa is the
-    *fallback*, kept so the chain always runs unattended - every large hole gets a made
-    fill instead (see A-empty in PROMPTS.md), and what is left for LaMa is small flat
-    patches of wall, desk and cabinet top, which carry no high-frequency detail to lose.
-    And only the model's output is resampled: the hole mask stays full resolution, so the
-    composite boundary is still exact and everything outside it is still bit-identical.
+    before writing anything. And only the model's output is resampled: the hole mask stays
+    full resolution, so the composite boundary is still exact and everything outside it is
+    still bit-identical.
+
+    `reach` caps something else, and it is the parameter that decides whether a fill comes
+    back as a picture or as a wash. **What LaMa can do is bounded by how far the deepest
+    hole pixel is from real paint, measured in the pixels the MODEL sees** - not in plate
+    px, and not as a fraction of the frame. Past roughly 300 of them it stops continuing
+    structure and returns a smooth average of the border; the wash is not a failure of
+    capacity, it is what the model has left when nothing in range tells it what was there.
+
+    Measured on this master, filling the fig at a range of scales - detail inside the hole
+    as a fraction of the real paint around it:
+
+        model px deep   675    337    253    169    127
+        detail ratio    0.30   0.34   0.37   0.40   0.39
+
+    Two things follow, and both are counter-intuitive enough to be worth stating.
+
+    *A wider mask makes it worse, not better.* Dilating the fig's mask to 200px takes the
+    hole from 675 model px to 1021 and the detail from 7.12 to 6.67. Whatever a bigger
+    hole buys in context it loses twice over in depth, so `--halo` is not a lever on this
+    and neither is a hand-painted brush mask (tested: 982 px deep, 6.63).
+
+    *The crop makes it worse too.* lama_peel() crops for resolution, which is right for
+    small objects and exactly backwards for large ones: the same fig hole is 321 model px
+    when the whole 5504px frame is handed over at max_side, and 675 when cropped to the
+    object. Cropping raised the effective resolution past what the hole could carry. That
+    is the whole of why the shell used to wash out behind the fig while the guitar beside
+    it came back clean - not the mask, not the model, not the amount of context.
+
+    So the scale is whichever of the two caps binds harder. Shallow holes are untouched and
+    keep native resolution; only a hole deep enough to defeat the model is downsampled, and
+    only as far as it has to be. `reach` is in model px, so unlike --margin/--halo it does
+    NOT scale with the plate: it is a property of LaMa, not of this room.
     """
     from PIL import Image
 
     h, w = bgr.shape[:2]
     scale = min(1.0, max_side / max(h, w))
+    if reach:
+        deep = cv2.distanceTransform((hole > 0).astype(np.uint8), cv2.DIST_L2, 5).max()
+        scale = min(scale, reach / max(1.0, float(deep)))
     if scale < 1.0:
         sw, sh = int(round(w * scale)), int(round(h * scale))
         small = cv2.resize(bgr, (sw, sh), interpolation=cv2.INTER_AREA)
@@ -223,7 +255,7 @@ def anchor_to_master(bgr, fill, hole, ring=64, solve_scale=0.25):
 
 
 
-def lama_peel(lama, bgr, jobs, context=384, max_side=2048):
+def lama_peel(lama, bgr, jobs, context=384, max_side=2048, reach=None):
     """Remove the objects one at a time, nearest first, instead of all at once.
 
     LaMa fills a hole from what surrounds it, so the only thing that matters is how far
@@ -246,6 +278,19 @@ def lama_peel(lama, bgr, jobs, context=384, max_side=2048):
     same cap is a mild downsample or none at all, so small objects fill at native
     resolution. Cost drops with it: the model re-encodes the crop, not the master.
 
+    That is right for a small object and backwards for a large one, which is why the crop
+    is paired with `reach`. Cropping raises the effective resolution, and raising the
+    resolution of a *deep* hole is the one thing that turns a fill into a wash: the fig's
+    hole is 321 model px when the whole frame goes in at `max_side` and 675 when cropped
+    to the object. `lama_fill`'s reach cap gives the depth back whatever the crop took, so
+    the crop keeps buying resolution for the objects that can use it and stops charging it
+    to the objects that cannot. See lama_fill() for the measurements.
+
+    `context` is deliberately NOT the fix for a deep hole and was measured not to be: 384px
+    of surroundings, 1200px, and the entire frame all return the same wash (detail ratio
+    0.30 / 0.30 / 0.31). Distance from real paint is a property of the hole's own shape, so
+    no amount of room around it changes the number that matters.
+
     `jobs` is (name, hole) in the order to remove them. Composition is `lama_fill`'s, so
     every pass still takes only its own masked pixels and everything else stays exact.
     """
@@ -257,11 +302,17 @@ def lama_peel(lama, bgr, jobs, context=384, max_side=2048):
         y0, y1 = max(0, ys.min() - context), min(work.shape[0], ys.max() + 1 + context)
         x0, x1 = max(0, xs.min() - context), min(work.shape[1], xs.max() + 1 + context)
         crop, hc = work[y0:y1, x0:x1], h[y0:y1, x0:x1]
+        deep = cv2.distanceTransform((hc > 0).astype(np.uint8), cv2.DIST_L2, 5).max()
         scale = min(1.0, max_side / max(crop.shape[:2]))
+        if reach:
+            scale = min(scale, reach / max(1.0, float(deep)))
+        # The depth in model px is the number that predicts the result, so log that and
+        # not just the scale - a run that washes out is diagnosable from the log alone.
         print(f"      {name:<14} {crop.shape[1]}x{crop.shape[0]} crop"
               f"{'' if scale == 1.0 else f' at {scale:.2f}x'}, "
-              f"hole {100.0 * (hc > 0).mean():.0f}% of it")
-        work[y0:y1, x0:x1] = lama_fill(lama, crop, hc, max_side=max_side)
+              f"hole {100.0 * (hc > 0).mean():.0f}% of it, "
+              f"{deep * scale:.0f} model px deep")
+        work[y0:y1, x0:x1] = lama_fill(lama, crop, hc, max_side=max_side, reach=reach)
     return work
 
 
@@ -308,6 +359,13 @@ def main() -> None:
                          "stretches the last visible texels across the whole gap. Pushed "
                          "out past the feather, the cliff lands where alpha is zero and "
                          "every stretched fragment is discarded.")
+    ap.add_argument("--fill-reach", type=int, default=220,
+                    help="px, IN THE PIXELS THE MODEL SEES, that the deepest point of a "
+                         "hole may sit from real paint. A crop is downsampled until its "
+                         "hole fits, because past ~300 LaMa stops continuing structure "
+                         "and returns a smooth wash. Does NOT scale with the plate - it "
+                         "is a property of the model, not of this room. 0 disables it. "
+                         "See lama_fill() for the measurements.")
     ap.add_argument("--device", default="cpu", choices=["cpu", "cuda", "mps"])
     ap.add_argument("--fill-dir", type=Path,
                     help="look here for {prefix}-layer{N}-fill.png - a hand-made fill for "
@@ -358,7 +416,7 @@ def main() -> None:
         args.feather = 6
     print(f"plate {bgr.shape[1]}x{bgr.shape[0]} = {k:.2f}x the {REF_W}px reference   "
           f"margin {args.margin}  feather {args.feather}  halo {args.halo}  "
-          f"depth-pad {args.depth_pad}")
+          f"depth-pad {args.depth_pad}  fill-reach {args.fill_reach}")
 
     layer_paths = sorted(args.masks.glob("_layer*.png"))
     if not layer_paths:
@@ -465,14 +523,15 @@ def main() -> None:
                 for k in range(n - 1, r, -1):
                     for name, om in sorted(by_layer.get(k, []), key=lambda t: t[1].sum()):
                         jobs.append((name, cv2.dilate(om.astype(np.uint8), ring) * 255))
-                work = lama_peel(get_lama(), bgr, jobs) if jobs else bgr
+                work = (lama_peel(get_lama(), bgr, jobs, reach=args.fill_reach)
+                        if jobs else bgr)
                 done = np.zeros(depth.shape, bool)
                 for _, h in jobs:
                     done |= h > 0
                 rest = ((hole > 0) & ~done).astype(np.uint8) * 255
                 if rest.any():
                     print(f"      {'leftover':<14} {100.0 * (rest > 0).mean():.1f}% of frame")
-                    work = lama_fill(get_lama(), work, rest)
+                    work = lama_fill(get_lama(), work, rest, reach=args.fill_reach)
                 color_r = np.where(keep[..., None], work, bgr)
                 source = f"lama, {len(jobs)} objects one at a time"
             # Depth, unlike colour, owes nothing to the at-rest frame: at the reference

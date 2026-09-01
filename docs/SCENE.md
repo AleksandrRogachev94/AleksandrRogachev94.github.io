@@ -268,6 +268,12 @@ band beside each silhouette; the purple area is never revealed and its fill does
 matter. Do not widen `--halo` to chase soft object-shaped tone on a wall: that is the
 object's cast shadow and it belongs there.
 
+If a fill comes back as a smooth wash, read the `model px deep` figure the peel logs for
+that object before touching anything else — that number, and not the mask, is what decides
+whether LaMa returns a picture. `--fill-reach` (220) holds it there automatically; a wash
+above it means the cap is off or set too high, and widening the mask or the crop will make
+it worse, not better. See PIPELINE.md for the measurements.
+
 ```sh
 # prompts EMPTY-0 (empty room) / EMPTY-1 (bare surfaces) in PROMPTS.md - attach $S.jpg and
 # the hole mask, and EDIT: same camera, same lighting, same exposure, same pixel size.

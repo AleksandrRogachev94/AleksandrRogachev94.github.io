@@ -40,7 +40,8 @@
       "open_frame": true,
       "in_front_of": [
         "shell",
-        "cabinet"
+        "cabinet",
+        "fg-plant-pot"
       ],
       "box": [
         0,
@@ -56,6 +57,53 @@
       ],
       "op": "flatten",
       "relief": 0.25
+    },
+    {
+      "name": "fg-plant-pot",
+      "why": "The fig's terracotta pot and its soil. Split from fg-plant because SAM will not put them in one mask: prompted every way - box alone, box without the soil negative, box with positives on the pot - the plant mask stops at the leaves and stem and covers 37% of the pot, so the pot stayed in the SHELL. That is the worst place for it. It is the nearest thing in the frame, it is a hard silhouette against floor and skirting, and the shell is the one mesh that is never cut, so the leaves slid over a pot nailed to the wall and the floor around it stretched - the visible artefact this entry exists to remove. Its own entry, prompted on its own, comes back at 0.93. No op: it is a solid pot with little relief, and unlike the leaves it has nothing to shear against.",
+      "in_front_of": [
+        "shell"
+      ],
+      "box": [
+        0.03,
+        0.87,
+        0.15,
+        1.0
+      ],
+      "points": [
+        [
+          0.055,
+          0.93
+        ],
+        [
+          0.125,
+          0.96
+        ],
+        [
+          0.048,
+          0.985
+        ],
+        [
+          0.1,
+          0.995
+        ],
+        [
+          0.1116,
+          0.9024
+        ],
+        [
+          0.0761,
+          0.9115
+        ],
+        [
+          0.09,
+          0.895
+        ],
+        [
+          0.1,
+          0.89
+        ]
+      ]
     },
     {
       "name": "cabinet",
@@ -120,6 +168,10 @@
         [
           0.2422,
           0.6963
+        ],
+        [
+          0.323,
+          0.566
         ]
       ],
       "box": [
@@ -132,6 +184,10 @@
         [
           0.309,
           0.6753
+        ],
+        [
+          0.3277,
+          0.5786
         ]
       ]
     },
@@ -190,11 +246,31 @@
       "in_front_of": [
         "desk"
       ],
+      "points": [
+        [
+          0.7711,
+          0.5961
+        ]
+      ],
       "box": [
         0.7079,
         0.4038,
         0.9005,
         0.6212
+      ],
+      "negative": [
+        [
+          0.7425,
+          0.5886
+        ],
+        [
+          0.7576,
+          0.593
+        ],
+        [
+          0.7282,
+          0.5893
+        ]
       ]
     },
     {
@@ -269,6 +345,12 @@
       "why": "Shelf, books and a trailing plant standing off the wall. Carried op `flatten` from the PREVIOUS master, whose mask came back bimodal - board at 48-63, vine at 128-143 - so the vine read 85 levels in FRONT of the shelf it hangs from and the leaves swam. This master does not do that: the whole mask spans 9 levels, 70 to 79. Flattening it to 2 was deleting relief to cure a disease it does not have. Deleted. Re-measure before re-adding.",
       "in_front_of": [
         "shell"
+      ],
+      "points": [
+        [
+          0.6917,
+          0.3011
+        ]
       ],
       "box": [
         0.6786,

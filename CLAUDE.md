@@ -114,6 +114,18 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   choice of model, is what makes registration structurally unbreakable. *Which* inpainter
   fills the hole is deliberately open. Stage 5 emits a hole mask every run and reads a
   hand-made fill back through `--fill-dir`.
+- Fixing a washed-out fill by giving the inpainter *more*. More context around the crop
+  (384px → 1200px → the whole frame) leaves the detail ratio at 0.30/0.30/0.31, and a
+  wider mask — `--halo`, or a loose hand-painted brush shape — makes it measurably worse,
+  because dilating a hole deepens it. The only thing that moves it is `--fill-reach`:
+  fewer *model* pixels between the hole's centre and real paint. A browser LaMa demo beats
+  the local one for exactly this reason and no other.
+- Peeling objects off in any order but nearest-first, or dropping the peel now that the
+  reach cap exists. Both were measured and both cost: whole hole at once 5.72, farthest
+  first 6.71, nearest first 7.70. Reversing the order bleeds the fig's green into the
+  floor behind it. Sorting *within* a layer is free either way and is not worth arguing.
+- Progressive band-peeling of a single large hole — fill the outer ring, composite, work
+  inward. It regrows the plant: each band feeds leaf-adjacent colour to the next.
 - Handing an inpainter the whole hole at once. It faces 47% of the frame with half of it
   >128px from real paint, and answers with a wash. **Peel the objects off one at a time,
   nearest layer first, each in a crop with real room around it** — the room corner, the

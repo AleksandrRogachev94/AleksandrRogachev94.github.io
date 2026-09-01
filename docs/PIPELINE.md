@@ -339,6 +339,45 @@ Pillow version that will not build on Python 3.13; it also ships a web server an
 zoo we have no use for. LaMa is free, local, deterministic and strongest at texture
 continuation, which keeps the whole chain reproducible from the master by one command.
 
+**What LaMa can do is bounded by one number: how deep the hole is _in the pixels the model
+sees_.** Not in plate px, not as a share of the frame. Past roughly 300 of them it stops
+continuing structure and averages the border instead — the wash. Measured, filling the fig
+at a range of scales, as detail inside the hole over the real paint around it:
+
+| model px deep | 675 | 337 | 253 | 169 | 127 |
+| ------------- | ---- | ---- | ---- | ---- | ---- |
+| detail ratio  | 0.30 | 0.34 | 0.37 | 0.40 | 0.39 |
+
+So `--fill-reach` (220) downsamples a crop until its hole fits, and shallow holes keep
+native resolution. Three things follow, and every one of them is the opposite of the
+obvious move:
+
+- **Context is not the lever.** 384px of surroundings, 1200px, and the whole frame all
+  return the same wash — 0.30 / 0.30 / 0.31. Distance from real paint is a property of the
+  hole's own shape, and no amount of room around it changes that number.
+- **A wider mask makes it worse.** Dilating the fig's mask by 200px takes the hole from
+  675 model px to 1021 and the detail from 7.12 to 6.67; a hand-painted brush blob, the
+  loose shape a person actually draws, lands at 982 and 6.63. Whatever a bigger hole buys
+  in context it loses twice over in depth. `--halo` is not a lever on this either.
+- **The crop was half the problem.** `lama_peel` crops for resolution, which is right for
+  a small object and backwards for a large one: the same fig hole is 321 model px when the
+  whole 5504px frame goes in at `max_side`, and **675 cropped to the object**. Cropping
+  raised the effective resolution past what the hole could carry. That, not the mask and
+  not the model, is why the shell used to wash out behind the fig while the guitar beside
+  it came back clean — and why a browser demo, which never zooms in, beat it.
+
+**Peeling is still load-bearing, and so is its order.** The reach cap does not replace it;
+they fix different halves. With the cap already on, detail across the whole filled area:
+
+| whole hole at once | nearest layer first | farthest layer first |
+| ------------------ | ------------------- | -------------------- |
+| 5.72               | **7.70**            | 6.71                 |
+
+Nearest first is right because it is the order the room uncovers, and reversing it bleeds
+foreground colour into the background — take the fig off last and its green ends up in the
+floor behind it. Within a layer, smallest-first and largest-first are indistinguishable
+(7.70 vs 7.73), so the sort there is not worth defending.
+
 **Depth → interpolation, never a generator.** LaMa is trained on natural images, so depth
 is off-distribution and it can hallucinate texture into what must be a smooth gradient.
 Depth behind an object is plain floor or wall.
