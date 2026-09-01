@@ -1,5 +1,6 @@
 ---
 import '../../styles/tokens.css';
+import { PROJECTS } from '../../data/projects';
 
 // The software bench as a real page.
 //
@@ -8,10 +9,11 @@ import '../../styles/tokens.css';
 // content — this page is not a stripped-down courtesy version, it is the document the room
 // is rendered on top of (CLAUDE.md rule 2).
 //
-// It is deliberately thin for now: the real list comes from src/data/projects.ts and the
-// live panes arrive with it, in the next increment.
+// Reads PROJECTS directly rather than repeating the list by hand, so this page and the
+// bench dashboard cannot drift apart. BirdLense and RoboTrail are not here — they exist
+// physically, so they get room addresses instead (see projects.ts).
 const title = 'The software bench — Alex Rogachev';
-const description = 'Software projects: flowlab, BirdLense, RoboTrail.';
+const description = 'Software projects, starting with flowlab.';
 ---
 
 <!doctype html>
@@ -34,18 +36,12 @@ const description = 'Software projects: flowlab, BirdLense, RoboTrail.';
       </p>
 
       <ul class="list">
-        <li id="flowlab">
-          <h2>flowlab</h2>
-          <p>A stable-fluids solver running on WebGPU, with a CPU fallback path.</p>
-        </li>
-        <li id="birdlense">
-          <h2>BirdLense</h2>
-          <p>Smart bird feeder: YOLO and ByteTrack for detection and tracking, BirdNET for calls.</p>
-        </li>
-        <li id="robotrail">
-          <h2>RoboTrail</h2>
-          <p>Graph SLAM on a Raspberry Pi, driving a small tracked robot.</p>
-        </li>
+        {PROJECTS.map((p) => (
+          <li>
+            <h2><a href={p.href} style={{ color: p.accent }}>{p.name}</a></h2>
+            <p>{p.line}</p>
+          </li>
+        ))}
       </ul>
     </main>
 
@@ -65,6 +61,8 @@ const description = 'Software projects: flowlab, BirdLense, RoboTrail.';
       .list { list-style: none; margin: 40px 0 0; padding: 0; }
       .list li { padding: 18px 0; border-top: 1px solid var(--focus-line); }
       .list h2 { font-size: 1.05rem; margin: 0 0 0.3em; }
+      .list h2 a { text-decoration: none; }
+      .list h2 a:hover { text-decoration: underline; }
       .list p { margin: 0; color: var(--focus-ink-soft); }
     </style>
   </body>

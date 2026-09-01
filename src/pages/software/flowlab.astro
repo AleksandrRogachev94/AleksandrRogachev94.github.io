@@ -1,0 +1,111 @@
+---
+import '../../styles/tokens.css';
+import { PROJECTS } from '../../data/projects';
+
+// One project's real page (CLAUDE.md rule 2): a crawler, a no-JS browser, and a visitor
+// on the reduced-motion path all land here directly, same as anyone who clicked through
+// the room. The bench dashboard (MonitorFocus.tsx) links to this exact URL — there is no
+// separate "embed" content living only inside the React island.
+//
+// v1 iframes the full deployed flowlab site as-is (settings panel included). PLAN.md's
+// long-term plan is a stripped `?embed=1` mode in the flowlab repo itself — a follow-up,
+// not done here.
+const flowlab = PROJECTS.find((p) => p.id === 'flowlab')!;
+
+const title = 'flowlab — Alex Rogachev';
+const description = flowlab.line;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body class="project-page" style={{ '--accent': flowlab.accent }}>
+    <main>
+      <p class="crumb"><a href="/software">← the software bench</a></p>
+
+      <header class="head">
+        <h1>{flowlab.name}</h1>
+        <p class="status">
+          <span class="status__dot" aria-hidden="true"></span>
+          {flowlab.status}
+          <span class="status__sep">·</span>
+          {flowlab.stack}
+        </p>
+      </header>
+
+      <p class="lede">{flowlab.line}</p>
+
+      <div class="stage">
+        <iframe
+          class="stage__frame"
+          src={flowlab.demo}
+          title="flowlab — live"
+          allow="fullscreen"
+        ></iframe>
+      </div>
+      <p class="stage__caption">
+        Drag to stir. <a href={flowlab.demo} target="_blank" rel="noopener">Open the full lab in a new tab ↗</a>
+      </p>
+    </main>
+
+    <style>
+      /* This page IS a focus state — dark half of the palette, this project's own accent. */
+      .project-page {
+        background: var(--focus-bg);
+        color: var(--focus-ink);
+        min-height: 100svh;
+      }
+      main { max-width: 76ch; margin: 0 auto; padding: 48px 24px 96px; }
+
+      .crumb { font: 12px/1 var(--font-mono); color: var(--focus-ink-soft); margin: 0 0 32px; }
+      .crumb a { color: var(--accent); text-decoration: none; }
+      .crumb a:hover { text-decoration: underline; }
+
+      .head { margin: 0 0 0.5em; }
+      h1 { font-size: 1.75rem; margin: 0 0 0.3em; }
+
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+        font: 12px/1 var(--font-mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--focus-ink-soft);
+      }
+      .status__dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .status__sep { opacity: 0.5; }
+
+      .lede { color: var(--focus-ink-soft); font-size: 1.05rem; margin: 20px 0 32px; }
+
+      .stage {
+        border: 1px solid var(--focus-line);
+        border-radius: 8px;
+        overflow: hidden;
+        aspect-ratio: 1134 / 600;
+        background: var(--focus-surface);
+      }
+      .stage__frame { width: 100%; height: 100%; border: 0; display: block; }
+
+      .stage__caption {
+        margin: 12px 0 0;
+        font: 12px/1.5 var(--font-mono);
+        color: var(--focus-ink-soft);
+      }
+      .stage__caption a { color: var(--accent); }
+    </style>
+  </body>
+</html>

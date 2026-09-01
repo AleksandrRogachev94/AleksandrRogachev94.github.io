@@ -38,7 +38,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Hotspot } from '../data/hotspots';
-import { PROJECTS } from '../data/projects';
+import { PROJECTS, type Project } from '../data/projects';
 import type { ScreenRect } from '../scripts/roomGeometry';
 import * as stage from '../scripts/stage';
 
@@ -63,6 +63,12 @@ interface Props {
   cut: boolean;
   /** Reported by the boot, because a self-test that cannot fail says nothing. */
   webgl: boolean;
+  /**
+   * Which project, if any, has been launched from the grid — lifted up to Room.tsx so Esc
+   * can pop one level at a time (project → grid → room) instead of always leaving outright.
+   */
+  project: string | null;
+  onSelectProject(p: Project): void;
   onExit(): void;
 }
 
@@ -113,11 +119,48 @@ function useUptime() {
 }
 
 export default function MonitorFocus({
-  hotspot, screen, view, open, reducedMotion, cut, webgl, onExit,
+  hotspot, screen, view, open, reducedMotion, cut, webgl, project, onSelectProject, onExit,
 }: Props) {
-  const closeRef = useRef<HTMLButtonElement>(null);
+  const deckBackRef = useRef<HTMLButtonElement>(null);
+  const appBackRef = useRef<HTMLButtonElement>(null);
   const clock = useClock();
   const uptime = useUptime();
+  const selectedProject = project ? PROJECTS.find((p) => p.id === project) : undefined;
+
+  // Where the launch grows from: the clicked tile's own screen position, not the viewport
+  // centre — the same "opening an app" read as double-clicking something on a Mac desktop,
+  // where the window unfurls from roughly where you clicked rather than materialising in
+  // the middle of the screen. Captured once per launch, not tracked continuously — the
+  // tile is gone the instant the view swaps, so there is nothing to keep following.
+  const [origin, setOrigin] = useState({ x: '50%', y: '50%' });
+
+  // What is actually in the DOM lags behind `selectedProject` on the way out. Opening is
+  // instant — there is nothing expensive to hide. Closing is not: unmounting the iframe
+  // tears down its GPU context, and for a real WebGPU workload that teardown can stall the
+  // main thread for a beat. Without a beat of cover, that stall is a bare black freeze
+  // where the grid was supposed to already be. `shown` keeps the panel (and the iframe)
+  // mounted through its own fade-out, so any stall lands mid-transition instead of on a
+  // static frame.
+  const [shown, setShown] = useState(selectedProject);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<number>(0);
+
+  useEffect(() => {
+    clearTimeout(closeTimer.current);
+    if (selectedProject) {
+      setClosing(false);
+      setShown(selectedProject);
+      return;
+    }
+    if (!shown) return;
+    setClosing(true);
+    closeTimer.current = window.setTimeout(() => {
+      setShown(undefined);
+      setClosing(false);
+    }, reducedMotion ? 0 : 200);
+    return () => clearTimeout(closeTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `shown` is read, not a trigger
+  }, [selectedProject, reducedMotion]);
 
   // The monitor turns on whenever you push into it. There is no "already booted" flag any
   // more, and it is not coming back: it was a module-scoped `let`, it was the only thing
@@ -137,17 +180,43 @@ export default function MonitorFocus({
     ['projects', String(PROJECTS.length)],
   ];
 
-  // Claim the single live slot. Nothing heavy runs here yet — flowlab's iframe is the next
-  // increment — but registering now means the eviction path is wired and testable before
-  // there is anything expensive to get wrong.
-  useEffect(() => stage.mount({
-    id: `focus:${hotspot.id}`,
-    destroy() { /* the panel unmounts with this effect; nothing else holds resources yet */ },
-  }), [hotspot.id]);
+  // Claim the single live slot only once something heavy is actually on screen — the
+  // iframe, not the bench chrome around it. It is something you arrive at, never ambient
+  // chrome (CLAUDE.md rule 1), so the bench grid itself never holds the slot.
+  useEffect(() => {
+    if (!shown?.demo) return;
+    return stage.mount({
+      id: `focus:${hotspot.id}:${shown.id}`,
+      destroy() { /* the iframe unmounts with this effect; nothing else holds resources */ },
+    });
+  }, [hotspot.id, shown?.id, shown?.demo]);
 
-  // Move focus into the panel so the keyboard follows the camera, and so Esc has an
-  // obvious owner. Room.tsx puts focus back on the hotspot on the way out.
-  useEffect(() => { closeRef.current?.focus(); }, []);
+  // Which input drove the most recent interaction — a click on a tile or the back link
+  // itself already focuses that element the normal way, so forcing focus onto a *different*
+  // control right after (below) is only for the benefit of someone navigating by keyboard.
+  // Doing it unconditionally made every launch/return leave a focus ring parked on "back"
+  // for mouse users too, since the browser can't tell a script's `.focus()` call apart from
+  // one that followed a keypress.
+  const lastInputRef = useRef<'pointer' | 'keyboard'>('keyboard');
+  useEffect(() => {
+    const onPointerDown = () => { lastInputRef.current = 'pointer'; };
+    const onKeyDown = () => { lastInputRef.current = 'keyboard'; };
+    addEventListener('pointerdown', onPointerDown, true);
+    addEventListener('keydown', onKeyDown, true);
+    return () => {
+      removeEventListener('pointerdown', onPointerDown, true);
+      removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
+
+  // Move focus onto whichever back control is on screen, so the keyboard follows both the
+  // camera (on arrival) and a project launch/return. Keyed to `shown`, not `project`, so
+  // this fires once the grid's back button actually exists rather than the instant the
+  // close was requested. Room.tsx puts focus back on the hotspot once the whole panel closes.
+  useEffect(() => {
+    if (lastInputRef.current === 'pointer') return;
+    (shown ? appBackRef : deckBackRef).current?.focus();
+  }, [shown]);
 
   // Insets, because that is what clip-path: inset() wants: distance in from each edge.
   // Clamped at zero — a screen that has already overflowed the viewport starts the clip at
@@ -176,11 +245,21 @@ export default function MonitorFocus({
       aria-modal="true"
       aria-label="The software bench"
     >
-      <div className="deck">
+      {/* Always mounted, even while a project is open on top of it. Keeping it here (rather
+          than swapping it out for `.app`) is what makes the close a real cross-fade back to
+          a screen that is already drawn, instead of a fade to whatever `.focus`'s own
+          background is — which is how "back to bench" turned into a black hold: there was
+          nothing behind `.app` to fade into. `inert` takes the grid out of the tab order and
+          out of the accessibility tree while a project covers it, without needing to hand-manage
+          `tabIndex` on every tile. */}
+      <div className="deck" inert={!!shown} aria-hidden={!!shown}>
         <header className="deck__bar">
+          <button ref={deckBackRef} type="button" className="chrome-back" onClick={onExit}>
+            ← back to the room <kbd>Esc</kbd>
+          </button>
+          <span className="deck__spacer" />
           <span className="deck__id">Alex Rogachev</span>
           <span>~/bench</span>
-          <span className="deck__spacer" />
           <span className="deck__clock">{clock}</span>
         </header>
 
@@ -190,7 +269,7 @@ export default function MonitorFocus({
               performance that evaporates. */}
           <dl className="deck__rail">
             <dt>renderer</dt><dd>{webgl ? 'webgl2' : 'static'}</dd>
-            <dt>index</dt><dd>{PROJECTS.length} projects</dd>
+            <dt>index</dt><dd>{PROJECTS.length} project{PROJECTS.length === 1 ? '' : 's'}</dd>
             <dt>room</dt><dd>day · summer</dd>
             <dt>uptime</dt><dd>{uptime}</dd>
           </dl>
@@ -204,6 +283,16 @@ export default function MonitorFocus({
                     className={`tile ${p.id === latestId ? 'tile--latest' : ''}`}
                     href={p.href}
                     style={{ '--tile-accent': p.accent, '--i': i } as React.CSSProperties}
+                    onClick={(e) => {
+                      // No live pane to launch into: let the tile be a plain link to its
+                      // own page, same as a modified click always is below.
+                      if (!p.demo) return;
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                      e.preventDefault();
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setOrigin({ x: `${r.left + r.width / 2}px`, y: `${r.top + r.height / 2}px` });
+                      onSelectProject(p);
+                    }}
                   >
                     <span className="tile__top">
                       <span>{p.tag}</span>
@@ -222,12 +311,59 @@ export default function MonitorFocus({
         <footer className="deck__status">
           <span className="deck__led" aria-hidden="true" />
           <span>system online</span>
-          <span className="deck__spacer" />
-          <button ref={closeRef} type="button" className="deck__close" onClick={onExit}>
-            back to the room <kbd>Esc</kbd>
-          </button>
         </footer>
       </div>
+
+      {shown && (
+        // Launching a project stays inside the same mounted panel — no page load, no
+        // white flash — and takes over almost the whole frame the way the grid never did,
+        // because a live demo is the thing worth arriving at, not the chrome around it.
+        // Sits on top of `.deck` above rather than replacing it (see the comment there).
+        <div
+          className={`app ${closing ? 'app--closing' : ''}`}
+          style={{ '--accent': shown.accent, '--ox': origin.x, '--oy': origin.y } as React.CSSProperties}
+        >
+          <header className="app__bar">
+            <button ref={appBackRef} type="button" className="chrome-back" onClick={onExit}>
+              ← back to bench <kbd>Esc</kbd>
+            </button>
+            <span className="deck__spacer" />
+            <span className="app__dot" aria-hidden="true" />
+            <span className="app__name">{shown.name}</span>
+            <span className="app__live">{shown.status}</span>
+            <span className="app__stack">{shown.stack}</span>
+          </header>
+          <div className="app__stage">
+            {shown.demo && (
+              <iframe
+                className="app__frame"
+                src={shown.demo}
+                title={`${shown.name} — live`}
+                allow="fullscreen"
+                onLoad={(e) => {
+                  // Same-origin, so this reaches straight into the loaded document, no
+                  // postMessage handshake needed. Without it, a visitor who clicks into the
+                  // demo to interact with it moves keyboard focus into the iframe's own
+                  // window — keydown there does not bubble to the parent — and "Esc pulls
+                  // back out" would quietly stop working for exactly the surface they are
+                  // most likely to be on.
+                  e.currentTarget.contentWindow?.addEventListener('keydown', (ev) => {
+                    if (ev.key === 'Escape') onExit();
+                  });
+                }}
+              />
+            )}
+          </div>
+          <footer className="app__foot">
+            <span className="app__line">{shown.line}</span>
+            {shown.repo && (
+              <a className="app__repo" href={shown.repo} target="_blank" rel="noopener">
+                source ↗
+              </a>
+            )}
+          </footer>
+        </div>
+      )}
 
       {/* Not announced: it is a flourish over content that is already in the tree and
           already readable to a screen reader, and narrating a self-test would be noise. */}

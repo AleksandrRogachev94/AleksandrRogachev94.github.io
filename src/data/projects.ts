@@ -12,6 +12,11 @@
  * There is deliberately no "experiments" section. The obvious dashboard layout is two
  * columns of tiles, and filling a second column would mean inventing work that does not
  * exist. Three real projects, stated plainly, is the honest shape.
+ *
+ * **BirdLense and RoboTrail are not here.** CLAUDE.md's organizing principle: things
+ * that exist physically get room addresses (window → BirdLense, work surface →
+ * RoboTrail); only things that exist purely as code live on the bench. Listing them here
+ * too would give each a second, competing address. They land in their own hotspots later.
  */
 
 export interface Project {
@@ -29,6 +34,14 @@ export interface Project {
    * increment and only the hrefs change when it lands.
    */
   href: string;
+  /**
+   * Where the live, playable thing lives, if there is one — iframed both inline on the
+   * bench (MonitorFocus) and as the hero on this project's own page. Same URL both
+   * places so there is exactly one thing to keep pointed at a deploy.
+   */
+  demo?: string;
+  /** Public repo, if there is one. Shown as a small "source ↗" link next to `demo`. */
+  repo?: string;
   /** The accent this project lights. Peers — see tokens.css. */
   accent: string;
   /** Shown in the tile's corner. True statements only. */
@@ -42,28 +55,10 @@ export const PROJECTS: readonly Project[] = [
     tag: 'GPU',
     line: 'A stable-fluids solver running in the browser.',
     stack: 'WebGPU · compute shaders · CPU fallback',
-    href: '/software#flowlab',
+    href: '/software/flowlab',
+    demo: 'https://alexrogachev.com/flowlab',
+    repo: 'https://github.com/AleksandrRogachev94/flowlab',
     accent: 'var(--accent-flowlab)',
     status: 'live',
-  },
-  {
-    id: 'birdlense',
-    name: 'BirdLense',
-    tag: 'VISION',
-    line: 'A smart bird feeder that knows what landed on it.',
-    stack: 'YOLO · ByteTrack · BirdNET',
-    href: '/software#birdlense',
-    accent: 'var(--accent-birdlense)',
-    status: 'live',
-  },
-  {
-    id: 'robotrail',
-    name: 'RoboTrail',
-    tag: 'ROBOTICS',
-    line: 'Graph SLAM on a Raspberry Pi, driving a tracked robot.',
-    stack: 'ROS · pose graph · Pi 5',
-    href: '/software#robotrail',
-    accent: 'var(--accent-robotrail)',
-    status: 'building',
   },
 ];

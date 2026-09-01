@@ -28,6 +28,13 @@ export interface RoomTuning {
   travel: number;
   /** Amplitude of the at-rest cursor parallax, in world units. Small on purpose. */
   parallax: number;
+  /**
+   * Amplitude of the autonomous idle wander, in world units — the room's own small life,
+   * present with no cursor in the room at all. Kept below `parallax` so a moving mouse
+   * still reads as the dominant motion; drift is what is left when nothing else is
+   * happening, not a second, competing parallax.
+   */
+  drift: number;
   /** How much of the push is translation rather than rotation. See the note in `update`. */
   lateral: number;
 }
@@ -43,6 +50,7 @@ export const ROOM_TUNING: RoomTuning = {
   fovDeg: 42,
   travel: 0.55,
   parallax: 0.02,
+  drift: 0.022,
   lateral: 1,
 };
 
@@ -107,6 +115,16 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v
 const LINEAR_TAIL = 0.25;
 const ease = (k: number) => (1 - LINEAR_TAIL) * easeInOut(k) + LINEAR_TAIL * k;
 
+/**
+ * Idle drift's two periods, in ms. Deliberately not a round ratio of one another — a
+ * Lissajous figure with commensurate periods traces a closed loop and repeats visibly
+ * inside a single sitting; incommensurate ones only realign after their product, decades
+ * from now. Slow because this has to read as the room settling, not as something
+ * animating — a shorter period is the first thing that would make it look like a demo.
+ */
+const DRIFT_PERIOD_X_MS = 21_000;
+const DRIFT_PERIOD_Y_MS = 15_000;
+
 export function createCameraRig(
   renderer: RoomRenderer,
   imageAspect: number,
@@ -131,6 +149,10 @@ export function createCameraRig(
   let eased = 0;
   let pointer = { x: 0, y: 0 };
   let dolly = 0;
+  /** Runs whenever `update` does, so drift is paused for free by everything that already
+   * stops the rAF (tab hidden, room scrolled off, a focus state live) — see roomRenderer's
+   * `onBeforeFrame`, which is the only caller. */
+  let clockMs = 0;
 
   // Read live rather than once at startup. Toggling the OS setting used to need a reload,
   // which made the reduced-motion path awkward to actually test.
@@ -173,8 +195,15 @@ export function createCameraRig(
     // get wrong: `reduced` only ever shortened the push, so the room still swam under the
     // cursor for the people who had asked it not to.
     const amp = reduced ? 0 : tuning.parallax;
-    const px = pointer.x * amp * (1 - e);
-    const py = pointer.y * amp * 0.6 * (1 - e);
+    clockMs += dtMs;
+    // The idle wander. Same fade-on-push and same reduced-motion cutoff as cursor
+    // parallax — it is added to `pointer`'s contribution rather than replacing it, so a
+    // moving mouse and the room's own drift are one offset, not two fights over the eye.
+    const driftAmp = reduced ? 0 : tuning.drift;
+    const driftX = Math.sin((clockMs / DRIFT_PERIOD_X_MS) * Math.PI * 2) * driftAmp;
+    const driftY = Math.sin((clockMs / DRIFT_PERIOD_Y_MS) * Math.PI * 2) * driftAmp * 0.6;
+    const px = (pointer.x * amp + driftX) * (1 - e);
+    const py = (pointer.y * amp * 0.6 + driftY) * (1 - e);
     const home: Vec3 = [px, py, -dolly];
 
     const cam = renderer.camera;

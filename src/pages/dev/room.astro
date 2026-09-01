@@ -24,6 +24,7 @@ import '../../styles/tokens.css';
       <label>push depth <input type="range" id="travel" min="0.2" max="0.95" step="0.01" value="0.55" /><output id="travelOut">0.55</output></label>
       <label>edge cut <input type="range" id="edgeCut" min="0.02" max="1" step="0.01" value="1" /><output id="edgeCutOut">1.00</output></label>
       <label>parallax <input type="range" id="parallax" min="0" max="0.12" step="0.002" value="0.02" /><output id="parallaxOut">0.020</output></label>
+      <label>drift <input type="range" id="drift" min="0" max="0.08" step="0.002" value="0.022" /><output id="driftOut">0.022</output></label>
       <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="1" /><output id="lateralOut">1.00</output></label>
       <label>solo <input type="range" id="solo" min="-1" max="2" step="1" value="-1" /><output id="soloOut">all</output></label>
       <p class="hint">click a prop to push into it · Esc pulls back · wheel to dolly · solo isolates one layer</p>
@@ -166,6 +167,7 @@ import '../../styles/tokens.css';
         bind('travel', (v) => { tuning.travel = v; });
         bind('edgeCut', (v) => { renderer.setEdgeCut(v); });
         bind('parallax', (v) => { tuning.parallax = v; }, (v) => v.toFixed(3));
+        bind('drift', (v) => { tuning.drift = v; }, (v) => v.toFixed(3));
         bind('lateral', (v) => { tuning.lateral = v; });
         // Isolating a layer is how you tell a bad mask from a bad fill: a hole in the
         // shell is a mask that missed, a smear inside one layer is a layer that is missing.

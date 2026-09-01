@@ -98,6 +98,16 @@
   object-fit: cover;
 }
 
+/* Once a focus panel is fully open (not mid-push/pull, when the canvas still has to draw),
+ * the room is not just paused (roomRenderer.stop() above), it is taken out of the paint tree
+ * entirely. `.room__canvas`'s own `filter` above forces it onto its own composited GPU
+ * layer, and a filtered layer generally keeps costing composite time every frame even while
+ * fully hidden behind an opaque panel — a second full-screen layer for the compositor to
+ * blend on top of whatever a live element (a WebGPU demo, say) is doing with the same GPU.
+ * `visibility: hidden` rather than removing the element: no reflow, and it costs nothing to
+ * flip back the instant `leave()` calls `renderer.start()` again. */
+.room--live .room__canvas { visibility: hidden; }
+
 /* ---- hotspots ------------------------------------------------------------
  * The affordance is the object's own light, not an outline drawn around it. Three things
  * were tried before this one: a bordered rectangle (reads as a debug overlay), a soft glow
@@ -581,7 +591,11 @@
 .deck {
   display: grid;
   grid-template-rows: auto 1fr auto;
-  height: 100%;
+  /* Absolute, not flow: the deck now stays mounted underneath `.app` (see the comment on
+   * `.app` below) rather than being swapped out for it, so it needs to fill `.focus`
+   * (the nearest positioned ancestor) on its own instead of relying on document flow. */
+  position: absolute;
+  inset: 0;
   max-width: 1100px;
   margin: 0 auto;
   padding: 0 24px;
@@ -624,20 +638,35 @@
   box-shadow: 0 0 8px var(--accent);
 }
 
-.deck__close {
+/* The one back control, in the one place, on both levels of the bench (grid and an open
+ * project) — top-left, matching the static /software pages' own "← back" crumb rather than
+ * the conventional top-right "close" corner. "Back" is a direction, not a dismissal, and a
+ * visitor who lands on the JS-off page and one who launches flowlab from the room should
+ * reach for it in the same spot either way. Styled as a link, not a bordered button, for
+ * the same reason: it is literally the same crumb, wearing the dark palette's accent. */
+.chrome-back {
   background: none;
-  border: 1px solid var(--focus-line);
-  border-radius: 5px;
-  padding: 6px 10px;
+  border: 0;
+  /* Padding plus a matching negative margin: a bigger hit target without shifting where the
+   * text itself sits in the bar or nudging anything else in the row. */
+  padding: 8px 10px;
+  margin: -8px -10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--focus-ink-soft);
   font: inherit;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12px;
   cursor: pointer;
 }
-
-.deck__close:hover { color: var(--focus-ink); border-color: var(--accent); }
-.deck__close kbd { color: var(--accent); font: inherit; }
+.chrome-back:hover { color: var(--accent); background: var(--focus-surface); }
+.chrome-back:focus-visible {
+  outline: var(--ring);
+  outline-color: var(--accent);
+  outline-offset: var(--ring-offset);
+}
+.chrome-back kbd { color: var(--accent); font: inherit; }
 
 .deck__body {
   display: grid;
@@ -660,6 +689,11 @@
    * animation ends, so if the two ever disagree this one silently loses while the settle-in
    * motion is playing, then wins back the instant it finishes. Keep them equal. */
   transform: translateY(-5%);
+  /* The -5% nudge above moves this element's whole box, hit-testing included, up into the
+   * header row above it — enough to sit over "back" and eat its clicks. `.deck__body`
+   * itself has nothing to click; only its tiles do, so the fix is to let clicks fall
+   * through the transformed box everywhere except the tiles themselves. */
+  pointer-events: none;
 }
 
 /* Everything inside assembles together once the machine is up. One animation on the
@@ -732,6 +766,9 @@
 .tile {
   display: block;
   height: 100%;
+  /* Restores what `.deck__body`'s `pointer-events: none` above turns off — the tiles are
+   * the only clickable thing in that box. */
+  pointer-events: auto;
   padding: 16px 18px 18px;
   border: 1px solid var(--focus-line);
   border-radius: 8px;
@@ -811,10 +848,118 @@
   color: var(--focus-ink-soft);
 }
 
+/* The press itself, before anything else has had time to respond — the tile answers a
+ * click in the same frame it happens, which is what makes the swap to .app read as *this
+ * tile* opening rather than an unrelated screen replacing it. */
+.tile:active { transform: translateY(-1px) scale(0.985); }
+
 @media (max-width: 720px) {
   .deck__body { grid-template-columns: 1fr; gap: 20px; }
   .deck__rail { display: none; }
 }
+
+/* ---- launching a project: the grid becomes an app, in place -------------
+ * Room → monitor → project stays three ranks, but the last step no longer leaves the
+ * mounted panel — no page load, no white flash between two dark screens. A live demo is
+ * the thing worth arriving at, so it gets almost the whole frame; the chrome shrinks to a
+ * single thin bar instead of stacking a second one under the bench's own.
+ *
+ * Grows from the tile that launched it (MonitorFocus.tsx sets --ox/--oy from the tile's own
+ * screen position on click) rather than the viewport centre — the same read as
+ * double-clicking something on a Mac desktop, where the window unfurls from roughly where
+ * you clicked. Falls back to centre for anything that opens without a captured point.
+ *
+ * Stacked on top of `.deck` — which stays mounted underneath, not swapped out — rather than
+ * replacing it. That is what makes the close read as a real cross-fade back to the bench
+ * instead of a fade to black: the deck is already there and already painted the instant
+ * this starts fading, whatever the iframe's own teardown costs once it actually unmounts
+ * (see the `shown`/`closing` comment in MonitorFocus.tsx). */
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  position: absolute;
+  inset: 0;
+  /* Explicit, not inherited: now that `.deck` sits directly underneath in the same stacking
+   * context, `.app` needs its own opaque backing or the deck's chrome shows through behind
+   * its header/footer. Same colour either side, so the only visible effect is the intended
+   * one — the deck bleeding through in proportion to `.app`'s own opacity while it fades. */
+  background: var(--focus-bg);
+  transform-origin: var(--ox, 50%) var(--oy, 50%);
+  animation: app-in 260ms var(--ease-camera) both;
+}
+
+@keyframes app-in {
+  from { opacity: 0; transform: scale(0.88); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The close, played *before* the iframe leaves the DOM — see the comment on `shown` in
+ * MonitorFocus.tsx. Faster than the entrance and un-eased at the end (no `both`-held final
+ * frame to speak of; the panel is simply gone once this finishes), matching how the room's
+ * own retreat is quicker than its approach. Collapses back toward the same point it grew
+ * from. Pointer-events off so a stray click mid-fade can't restart the demo or double-fire
+ * the back button. */
+.app--closing {
+  animation: app-out 200ms var(--ease-camera) both;
+  pointer-events: none;
+}
+
+@keyframes app-out {
+  from { opacity: 1; transform: none; }
+  to   { opacity: 0; transform: scale(0.92); }
+}
+
+.app__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--focus-line);
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--focus-ink-soft);
+}
+
+.app__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.app__name { color: var(--focus-ink); font-size: 12px; letter-spacing: 0.14em; }
+.app__live { color: var(--accent); }
+.app__stack { color: var(--focus-ink-soft); }
+
+/* Black, not --focus-surface: this is the demo's own backdrop while it loads, and it sits
+ * at the edge of the frame, so it should read as a screen, not as another dark panel. */
+.app__stage { min-height: 0; background: #000; }
+.app__frame { width: 100%; height: 100%; border: 0; display: block; }
+
+/* One line of what it actually is — the one thing the header bar deliberately left out
+ * (name and stack read fine without it, but "flowlab" alone tells a first-time visitor
+ * nothing). Mirrors .deck__status's placement so the app view still reads as the same
+ * machine's chrome, just thinner. */
+.app__foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--focus-line);
+  font: 12px/1.4 var(--font-body);
+  color: var(--focus-ink-soft);
+}
+.app__line { flex: 1; }
+.app__repo {
+  flex: none;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  text-decoration: none;
+}
+.app__repo:hover { text-decoration: underline; }
 
 /* Rule: reduced motion cuts, it does not animate. The camera already does not move, so
  * --push never leaves 0 and the canvas filter is inert on its own; the rest is collapsed
@@ -828,6 +973,7 @@
   .deck__body,
   .deck__bar,
   .deck__status,
+  .app,
   .tile,
   /* More specific than .tile, so it needs naming or it keeps its pulse. */
   .tile--latest:not(:hover) { animation: none; }

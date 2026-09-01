@@ -18,6 +18,7 @@ import { createCameraRig, type CameraRig } from '../scripts/cameraRig';
 import { imageRectToScreen, pushedRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
 import { TRANSITION, TRANSITION_VARS } from '../scripts/transition';
 import { HOTSPOTS, hotspotById, type Hotspot } from '../data/hotspots';
+import type { Project } from '../data/projects';
 import HotspotButton from './Hotspot';
 import MonitorFocus from './MonitorFocus';
 
@@ -53,6 +54,11 @@ export default function Room() {
   const [view, setView] = useState({ w: 0, h: 0 });
   const [focus, setFocus] = useState<Hotspot | null>(null);
   const [phase, setPhase] = useState<Phase>('idle');
+  // A second, nested level inside the monitor's focus state: which project (if any) has
+  // been launched from the bench grid. Lives here rather than inside MonitorFocus because
+  // Esc has to know about it — the first Esc inside a project steps back to the grid, and
+  // only a second one leaves the monitor (mirrors requestExit below).
+  const [project, setProject] = useState<string | null>(null);
 
   // The rAF callback and the observers need the current phase without being re-created
   // every time it changes, so it is mirrored into a ref.
@@ -181,6 +187,7 @@ export default function Room() {
     timerRef.current = window.setTimeout(() => {
       setPhase('idle');
       setFocus(null);
+      setProject(null);
       // Put the keyboard back where it came from, or Esc silently drops focus to the top of
       // the page and the room becomes unreachable without re-tabbing through everything.
       if (returnTo) document.getElementById(`hotspot-${returnTo.id}`)?.focus();
@@ -194,6 +201,18 @@ export default function Room() {
     enter(h);
   }, [enter]);
 
+  /**
+   * Launching a project from the bench grid pushes its own history entry on top of the
+   * monitor's, the same way entering the monitor pushed one on top of the room's — so the
+   * URL bar reflects it and the back button is still the one gesture that undoes everything,
+   * one step at a time.
+   */
+  const selectProject = useCallback((p: Project) => {
+    if (!focus) return;
+    history.pushState({ hotspot: focus.id, project: p.id }, '', p.href);
+    setProject(p.id);
+  }, [focus]);
+
   const requestExit = useCallback(() => {
     if (history.state?.hotspot) history.back();  // popstate below does the work
     else leave();
@@ -201,10 +220,16 @@ export default function Room() {
 
   useEffect(() => {
     const onPop = () => {
-      const id: string | undefined = history.state?.hotspot;
-      const next = id ? hotspotById(id) : undefined;
-      if (next?.focusState) enter(next);
-      else leave();
+      const state = history.state as { hotspot?: string; project?: string } | null;
+      const next = state?.hotspot ? hotspotById(state.hotspot) : undefined;
+      if (next?.focusState) {
+        // Already on this hotspot — a project was pushed or popped underneath it, so just
+        // follow that; re-entering would replay the camera push for no reason.
+        if (focusRef.current?.id !== next.id) enter(next);
+        setProject(state?.project ?? null);
+      } else {
+        leave();
+      }
     };
     addEventListener('popstate', onPop);
     return () => removeEventListener('popstate', onPop);
@@ -249,7 +274,7 @@ export default function Room() {
   return (
     <div
       ref={rootRef}
-      className={`room ${busy ? 'room--busy' : ''}`}
+      className={`room ${busy ? 'room--busy' : ''} ${phase === 'live' ? 'room--live' : ''}`}
       // The timeline, handed to the stylesheet so the camera and the keyframes cannot
       // disagree about when the camera stops. `--push` is written on this same element
       // every frame by the rig; React only touches the keys it owns, so the two coexist.
@@ -282,6 +307,8 @@ export default function Room() {
       {focus && (
         <MonitorFocus
           hotspot={focus}
+          project={project}
+          onSelectProject={selectProject}
           // Where the clip starts: the screen's rect *after* the push, or — on the paths
           // where no camera ever moves — where it simply is. Handing the pushed rect to a
           // still image would open the panel from a big centred rectangle sitting on
