@@ -1,0 +1,71 @@
+---
+import '../../styles/tokens.css';
+
+// The software bench as a real page.
+//
+// This is what a crawler, a direct link, a browser with JS off and a reader on the
+// reduced-motion path all get. The focus state mounted inside the room shows the same
+// content — this page is not a stripped-down courtesy version, it is the document the room
+// is rendered on top of (CLAUDE.md rule 2).
+//
+// It is deliberately thin for now: the real list comes from src/data/projects.ts and the
+// live panes arrive with it, in the next increment.
+const title = 'The software bench — Alex Rogachev';
+const description = 'Software projects: flowlab, BirdLense, RoboTrail.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body class="bench-page">
+    <main>
+      <p class="crumb"><a href="/">← back to the room</a></p>
+      <h1>The software bench</h1>
+      <p class="lede">
+        Things that exist only as code. They are peers — the bench is the surface, not one
+        of the projects on it.
+      </p>
+
+      <ul class="list">
+        <li id="flowlab">
+          <h2>flowlab</h2>
+          <p>A stable-fluids solver running on WebGPU, with a CPU fallback path.</p>
+        </li>
+        <li id="birdlense">
+          <h2>BirdLense</h2>
+          <p>Smart bird feeder: YOLO and ByteTrack for detection and tracking, BirdNET for calls.</p>
+        </li>
+        <li id="robotrail">
+          <h2>RoboTrail</h2>
+          <p>Graph SLAM on a Raspberry Pi, driving a small tracked robot.</p>
+        </li>
+      </ul>
+    </main>
+
+    <style>
+      /* The dark half of the palette. This page IS a focus state; it may read --focus-*. */
+      .bench-page {
+        background: var(--focus-bg);
+        color: var(--focus-ink);
+        min-height: 100svh;
+      }
+      main { max-width: 64ch; margin: 0 auto; padding: 48px 24px 96px; }
+      .crumb { font: 12px/1 var(--font-mono); color: var(--focus-ink-soft); margin: 0 0 32px; }
+      .crumb a { color: var(--accent); text-decoration: none; }
+      .crumb a:hover { text-decoration: underline; }
+      h1 { font-size: 1.75rem; margin: 0 0 0.3em; }
+      .lede { color: var(--focus-ink-soft); margin-top: 0; }
+      .list { list-style: none; margin: 40px 0 0; padding: 0; }
+      .list li { padding: 18px 0; border-top: 1px solid var(--focus-line); }
+      .list h2 { font-size: 1.05rem; margin: 0 0 0.3em; }
+      .list p { margin: 0; color: var(--focus-ink-soft); }
+    </style>
+  </body>
+</html>

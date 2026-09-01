@@ -1,0 +1,838 @@
+/*
+ * The room island and the focus states it mounts.
+ *
+ * Two palettes, never blended (CLAUDE.md rule 4, tokens.css). Everything above the
+ * `handoff` block reads `--room-*`; everything from `.focus` down reads `--focus-*` and
+ * exactly one `--accent`.
+ *
+ * **The shape of the transition, since it is spread across three files.** The camera moves
+ * for `--push-ms` and stops with the monitor filling ~76% of the frame — it never tries to
+ * travel the last stretch, because that is the part a displaced mesh cannot reconstruct.
+ * The remaining distance is covered by the monitor's *screen* rather than by the camera:
+ * the panel arrives at exactly the rectangle the screen has reached, lit, as though the
+ * backlight had come up, and then pushes its own edges off the frame. Move toward the
+ * monitor; transition through the screen.
+ *
+ * **It has to be one motion, and that is a timing claim, not a styling one.** Every delay
+ * below is expressed against `--push-ms`, which transition.ts owns and Room.tsx writes onto
+ * the room element. Nothing here guesses when the camera will be finished; it is told. The
+ * previous version guessed 600ms at an exponential approach that had no finishing time at
+ * all, and then spent 95ms fading the panel up before it started expanding — a camera
+ * gliding to a halt, a pause, and a second move. Three separate arrivals, which is exactly
+ * what "it feels like a two step process" was describing. There is now one deceleration in
+ * the whole gesture and it is at the very end.
+ *
+ * Two things were removed to get there and should not come back. A full-frame accent
+ * vignette that closed in during the approach — it reads as a circle sliding over the
+ * picture, which is a transition *effect* announcing itself, and it is nothing the room
+ * would actually do. And a circular iris for the takeover, for the same reason: an iris
+ * says "a new page is arriving", where a rectangle that starts as the screen says "you are
+ * looking at the screen now".
+ */
+
+/* ---- the room ----------------------------------------------------------- */
+
+.room {
+  position: relative;
+  width: 100%;
+  height: 100svh;
+  overflow: hidden;
+  /* So the wake's `screen` blend mixes with the room behind it and not the page ground. */
+  isolation: isolate;
+  background: var(--room-bg);
+  /* Written every frame by the rig: 0 at rest, 1 fully pushed in. The only channel
+   * between the camera and the DOM, so the push costs no React renders. */
+  --push: 0;
+  /* The timeline. Room.tsx overwrites all five from transition.ts, which is the source of
+   * truth; these are here so the file can be read on its own and so nothing breaks if the
+   * island fails to hydrate. */
+  --push-ms: 900ms;
+  --takeover-ms: 520ms;
+  --black-pause-ms: 130ms;
+  --close-ms: 200ms;
+  --boot-ms: 1600ms;
+}
+
+.room__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The veil: defocus and dim, ramping in over the second half of the push.
+   *
+   * Two jobs, and they pull the same way. The mesh tears at silhouettes as the camera gets
+   * close — disocclusion is the price of parallax and no parameter avoids it — so the
+   * artifacts arrive on a schedule, and this arrives with them. And a viewport that is
+   * already dark and soft is one the near-black panel can appear inside without a seam:
+   * the brightest, sharpest thing on screen at the handoff should be the screen itself.
+   *
+   * It starts at --push 0.45 rather than the 0.88 it used to, which was so late that it
+   * was only ever masking the last frame or two. The first half of the journey is still
+   * completely unfiltered, because the parallax is the entire argument for this room being
+   * a displaced mesh rather than a photograph and covering it would waste the one thing
+   * worth showing. At rest the whole list evaluates to identity and costs nothing.
+   *
+   * It reads --push, so it lifts by itself on the way out as the camera retreats. That is
+   * most of what makes the exit read as a reverse rather than as a dismissal.
+   *
+   * The blur peaks at 9px, not the 26px it briefly did. A heavier veil hides more
+   * reconstruction, but it also widens the gap the panel has to cross: a hard-focus
+   * rectangle appearing on top of a heavily defocused room is two images, not one moment,
+   * and the arrival read as a cut no matter how well the velocities matched. Dimming does
+   * the same masking work without opening a sharpness gap, so it carries the difference.
+   *
+   * The dimming used to bottom out at 56% brightness — plenty dark to look "dim", nowhere
+   * near the panel's own near-black (--focus-bg, #0a0b0d). The panel becomes opaque within
+   * a couple of milliseconds of the takeover starting (see `takeover` below), so whatever
+   * brightness the room is at when that happens is the near side of the cut. At 56% that cut
+   * reads as a swap — a lit room replaced by a dark one — no matter how the colour on top of
+   * it is tuned. It now goes to ~12%, close enough to the panel's own darkness that the swap
+   * stops being the thing you see at all — there is no glow left to do the smaller job of
+   * hiding it (see the note near `.boot__panel` below). Same start point, push 0.45. */
+  filter:
+    blur(max(0px, calc(var(--push) * 17px - 8px)))
+    brightness(calc(1 - max(0, var(--push) * 1.6 - 0.72)));
+}
+
+/* No WebGL2: the same framing, as a flat image. */
+.room__still {
+  object-fit: cover;
+}
+
+/* ---- hotspots ------------------------------------------------------------
+ * The affordance is the object's own light, not an outline drawn around it. Three things
+ * were tried before this one: a bordered rectangle (reads as a debug overlay), a soft glow
+ * over the bounding rect (invisible — `screen` blending adds light and sunlit art has none
+ * to spare), and a hairline rim on the true silhouette. The rim was right in a still and
+ * wrong in motion: it is a screen-space overlay, the art under it is a mesh that parallax
+ * keeps nudging, and a couple of pixels of drift visibly unglues a line from the edge it
+ * traces. A soft filled glow cannot come unglued, it has plenty of headroom on a screen
+ * the art keeps near-black, and it reads as the room reacting rather than as UI.
+ *
+ * It answers to hover and focus and to nothing else. There was also a one-time
+ * introduction — every object lighting itself once, staggered, after the room settled —
+ * and it is gone. It needed a second `screen`-blended layer per hotspot so that an
+ * animation and a transition were not fighting over one opacity, it put motion on screen
+ * that nothing the visitor did explained, and its fade could still be caught overlapping a
+ * hover. The pointer and the label carry that job now. */
+
+.hotspots {
+  position: absolute;
+  inset: 0;
+}
+
+.room--busy .hotspots {
+  pointer-events: none;
+}
+
+.hotspot {
+  position: absolute;
+  display: block;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--room-ink);
+}
+
+/* The light is `screen`-blended so that it mixes with the canvas, which means nothing
+ * between it and `.room` may carry opacity or a filter: either would make this an isolated
+ * group, the blend would mix with nothing, and the effect would flip back into being a flat
+ * accent decal. Hence a bare positioning wrapper. */
+.hotspot__wake {
+  position: absolute;
+  pointer-events: none;
+}
+
+.hotspot__light {
+  position: absolute;
+  inset: 0;
+  /* Light, not a decal. Screen-blending is what makes the panel *brighten* — keeping its
+   * painted sheen — instead of being painted over in flat accent, and it is the same thing
+   * that makes the spill land on the desk like spill. */
+  mix-blend-mode: screen;
+  background: var(--accent);
+  /* The image is cropped to its own lit extent and the element is placed at that rect
+   * (Hotspot.tsx), so the mask fills it exactly. It used to be the whole frame under
+   * `mask-size: cover`, which needed no coordinates but made this element the size of the
+   * viewport — and a blend mode takes an element off the compositor's fast path, so every
+   * frame of the fade below repainted the entire room. The fade arrived in two or three
+   * visible steps: it looked like the glow started easing and then snapped to full. */
+  mask-size: 100% 100%;
+  -webkit-mask-size: 100% 100%;
+  /* Same reason: promote it once, up front, rather than at the moment the fade starts. */
+  will-change: opacity;
+  contain: paint;
+  opacity: 0;
+  /* Slow enough to read as something warming up rather than as a state toggle. */
+  transition: opacity 260ms cubic-bezier(0.33, 0, 0.2, 1);
+}
+
+/* 0.4 is measured, not picked: at 0.85 the accent takes the panel to flat cyan and the
+ * painted screen stops existing underneath it. */
+.hotspot:hover .hotspot__light,
+.hotspot:focus-visible .hotspot__light {
+  opacity: 0.4;
+}
+
+/* Rule 3: the ring must always be visible, on art of any brightness. The outer white
+ * keeps it legible over the dark monitor as well as the bright window. */
+.hotspot:focus-visible {
+  outline: var(--ring);
+  outline-color: var(--room-ink);
+  outline-offset: var(--ring-offset);
+  box-shadow: 0 0 0 calc(var(--ring-offset) + 4px) color-mix(in srgb, var(--room-bg) 80%, transparent);
+}
+
+/* Out in one frame when a push starts, and gated on the class rather than on --push: the
+ * camera is already moving on the frame the class lands, and anything that eases out from
+ * here spends that ease sitting over art that has moved on. Last in source order so it
+ * beats the hover rule at equal specificity — the pointer is usually still on the object
+ * at the moment of the click. */
+.room--busy .hotspot__light {
+  transition: none;
+  opacity: 0;
+}
+
+.hotspot__label {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--room-surface) 92%, transparent);
+  border: 1px solid var(--room-line);
+  color: var(--room-ink);
+  font: 500 13px/1.3 var(--font-body);
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity var(--dur-ui), transform var(--dur-ui);
+}
+
+.hotspot:hover .hotspot__label,
+.hotspot:focus-visible .hotspot__label {
+  opacity: 1;
+  transform: none;
+}
+
+.room--busy .hotspot__label {
+  transition: none;
+  opacity: 0;
+}
+
+/* ---- the handoff --------------------------------------------------------- */
+
+.focus {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow: hidden;
+  background: var(--focus-bg);
+  color: var(--focus-ink);
+
+  /* The moment the camera stops and the screen takes the motion over. Everything in this
+   * file is offset from it, and it is not a guess — transition.ts hands the same number to
+   * the rig, so the frame the camera finishes on is the frame this fires. */
+  --t0: var(--push-ms);
+  /* When the boot sequence itself is allowed to start speaking.
+   *
+   * Not --t0. The clip is still mid-expansion for most of --takeover-ms — it does not
+   * finish covering the viewport until --t0 + --takeover-ms — and the first pass had every
+   * boot line keyed to --t0 directly, so the mark and the first couple of lines were fading
+   * in on top of a rectangle that was visibly still growing. Reads as content elbowing into
+   * an unfinished move. --black-pause-ms on top of that is a deliberate held beat of plain
+   * black once the screen genuinely is the whole frame, before anything happens on it — the
+   * arrival gets to register as an arrival before the machine starts talking. */
+  --boot0: calc(var(--t0) + var(--takeover-ms) + var(--black-pause-ms));
+  /* When the interface is ready to assemble: after the machine has come up. */
+  --t1: calc(var(--boot0) + var(--boot-ms));
+  /* Derived; see the note above .focus--open. */
+  --ease-takeover: cubic-bezier(0.25, 0.35, 0.25, 1);
+}
+
+/* Nothing preceded the panel — reduced motion, or the no-WebGL still. The entrance is
+ * timed to trail a camera push, so with no push to trail there is nothing to wait for. */
+.focus--cut { --t0: 0ms; }
+/* Coming back to a machine that is already on: no boot plays (MonitorFocus gates it on the
+ * same `cut` condition), so the interface should not sit around waiting for --boot0 + a
+ * --boot-ms it isn't using. Stated directly rather than by zeroing a duration and hoping
+ * the formula it feeds collapses correctly — --t1 no longer factors through --boot-ms alone
+ * now that --boot0 has its own terms. */
+.focus--booted { --t1: var(--t0); }
+
+/* An animation, not a transition: the panel is mounted already carrying its open class, so
+ * a transition would have no start value to move from and would simply snap.
+ *
+ * It starts as the screen's own rectangle, at the size and place the screen has actually
+ * reached by the end of the push (roomGeometry.pushedRectToScreen), and pushes its edges
+ * off the frame. The monitor becomes the viewport instead of being replaced by one, which
+ * is what lets the camera stop at 78% and hand the last stretch to the screen. That
+ * registration is only exact because the push now has a real end — an approach that merely
+ * got close left the panel a few percent oversized for the screen it grew out of.
+ *
+ * Opacity is in here and is not decoration: `both` fills backwards through the delay, so
+ * whatever 0% says is on screen for the whole approach, and a panel visible then is a black
+ * rectangle parked over the room. The step up to 1 is fast — a few percent of the duration —
+ * rather than the quarter of it this used to spend fading in. That fade was a 95ms hold at a
+ * fixed size in the middle of a move, i.e. the stall between the two steps. It is not the
+ * half a percent (~2.6ms) it briefly was, either: instant was tuned back when the room's own
+ * dim veil bottomed out at 56% brightness (.room__canvas), and the near-instant snap to
+ * opaque was doing the work of masking that gap on its own. Now that the veil goes to ~12%,
+ * the two sides of the cut are close enough that a few extra milliseconds of ramp reads as
+ * the room finishing its fade rather than as a rectangle appearing. */
+@keyframes takeover {
+  0%  { opacity: 0; clip-path: inset(var(--st) var(--sr) var(--sb) var(--sl) round 6px); }
+  3%  { opacity: 1; clip-path: inset(var(--st) var(--sr) var(--sb) var(--sl) round 6px); }
+  100% { opacity: 1; clip-path: inset(0 0 0 0 round 0); }
+}
+
+/* `--ease-takeover` picks the gesture up at the speed the camera left it, then decelerates
+ * once, at the end.
+ *
+ * Its initial slope is 1.4x the average, and that is measured rather than chosen. At the
+ * handoff the screen's edges are sweeping outward at ~0.38 of the frame per second (the
+ * camera's own end velocity through the magnification 1/(1 - travel·e), which is hyperbolic
+ * — the apparent zoom accelerates even as the camera decelerates). The clip then has 0.118
+ * of the frame left to cover in --takeover-ms, an average of ~0.28 per second. 0.38/0.28 is
+ * where the 1.4 comes from, and cubic-bezier's start slope is y1/x1. Retime the takeover or
+ * the camera and this wants recomputing, or the seam becomes a visible change of pace. */
+.focus--open {
+  animation:
+    takeover var(--takeover-ms) var(--ease-takeover) var(--t0) both,
+    focus-in calc(var(--takeover-ms) / 2) linear var(--t0) both;
+}
+
+/* The panel arrives fractionally out of focus and resolves, which is the other half of not
+ * landing on a hard edge. The room behind it is defocused at the handoff; a perfectly sharp
+ * rectangle appearing inside that is the seam, and no amount of matching the *motion*
+ * hides a mismatch in focus. Starting soft and pulling into focus is also, conveniently,
+ * what a display does when it wakes. It softens the expanding clip edge too, since a filter
+ * is applied after the clip. */
+@keyframes focus-in {
+  from { filter: blur(7px); }
+  to   { filter: blur(0); }
+}
+
+/* Out: much faster than the way in, and it does not wait for the camera. Both start
+ * together (Room.tsx), so the panel is off the screen a fifth of the way through the
+ * retreat and the rest of the pull-back happens in the open. `reverse` mirrors the curve
+ * too, so the collapse accelerates away instead of easing to a stop — an exit should look
+ * like leaving, not like arriving somewhere smaller. */
+.focus--closing {
+  animation: takeover var(--close-ms) var(--ease-takeover) 0ms reverse both;
+}
+
+/* There used to be a `.focus__glow` here: a radial flare, child of the clip, meant to spike
+ * bright the instant the takeover started and mask the swap from room art to panel. Gone,
+ * after two rounds of toning it down still read as a flash — because the swap it was
+ * masking was the real problem. The room used to bottom out at 56% brightness while the
+ * panel went opaque in ~3ms; no amount of retuning a light on top of that gap stopped it
+ * reading as a pop. Closing the gap itself (.room__canvas now reaches ~12%) makes the swap
+ * genuinely quiet without needing anything to hide it behind, and the arrival lands on
+ * plain black — which the boot below now treats as the start of the sequence rather than
+ * a hole to paper over. `.boot__panel`'s own `boot-flicker` (an LCD settling, 280ms) is the
+ * only "screen waking" cue left, and it now plays after --boot0 — i.e. after the black has
+ * actually held for a beat — instead of racing the clip's own expansion. */
+
+/* ---- the boot -----------------------------------------------------------
+ * Not a login screen and not a splash: no gate, nothing to click through, nothing to
+ * dismiss, and it plays once per visit — come back to the bench from a project and the
+ * machine is already on. It exists because the monitor is an *object in a room*, so
+ * clicking it should turn something on; without that, arriving at the bench is a page
+ * navigation wearing a camera move.
+ *
+ * The lines are a power-on self-test, and every one of them is true about the page you are
+ * already looking at — the project count comes from projects.ts, the renderer line reports
+ * what actually initialised. Nothing waits on any of it. */
+
+/* **Longhands, deliberately, for the whole boot chain.**
+ *
+ * `animation: name var(--dur) linear var(--delay) both` is a shorthand that has to be
+ * re-parsed after substitution, and if anything in it fails to parse the *entire* shorthand
+ * falls back to initial values — including `animation-name: none`. The failure is total and
+ * completely silent: no console error, no fallback, the sequence simply never plays. That is
+ * one of the two things this file was accused of, and whether or not it was the cause here,
+ * a boot sequence that can vanish because a delay is a variable is not worth the four saved
+ * lines. Longhands substitute per property and fail independently. */
+
+.boot {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  background: var(--focus-bg);
+  /* Visual only. MonitorFocus's own comment is explicit that this is a power-on, not a
+   * gate — "nothing waits on it, there is nothing to dismiss" — but an opaque full-viewport
+   * div with no pointer-events rule *is* a gate: it gave "back to the room" a dead zone for
+   * the boot's entire length (previously ~2.5s, longer once the boot pacing slowed down),
+   * because the button underneath is real and present the whole time, just covered. Esc
+   * already worked through the boot regardless, since a window keydown listener does not
+   * care what is painted on top — this brings the mouse path in line with that rather than
+   * chasing it by re-tuning the duration again. */
+  pointer-events: none;
+  /* Opaque from the moment `.focus` is (fill-mode backwards holds the 0% keyframe through
+   * the whole delay, however long), so the deck chrome underneath stays covered for all of
+   * --t0 .. --boot0 regardless of when this element's own keyframe clock starts. Delayed to
+   * --boot0 rather than --t0 so that clock — and the 82%/100% fade-out it drives — is timed
+   * against when the boot content actually starts, not against when the panel opened. */
+  animation-name: boot-out;
+  animation-duration: var(--boot-ms);
+  animation-delay: var(--boot0);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+@keyframes boot-out {
+  0%, 82% { opacity: 1; visibility: visible; }
+  100%    { opacity: 0; visibility: hidden; }
+}
+
+/* The wake: an LCD settling in the first quarter-second, before it has anything to say.
+ * On its own element because `boot-out` above already owns the opacity of `.boot`, and two
+ * animations on one property means the later one simply wins. Cheap, brief, and the reason
+ * the machine reads as hardware rather than as a div that appeared. It is the only "screen
+ * waking" cue left post-glow, and it earns that job now that it plays at --boot0 — after the
+ * clip has actually finished covering the viewport and held on plain black for a beat —
+ * instead of racing the clip's own expansion. */
+.boot__panel {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  animation-name: boot-flicker;
+  animation-duration: 280ms;
+  animation-delay: var(--boot0);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+@keyframes boot-flicker {
+  0%, 100% { opacity: 1; }
+  14%      { opacity: 0.4; }
+  26%      { opacity: 1; }
+  44%      { opacity: 0.72; }
+  58%      { opacity: 1; }
+}
+
+/* The mark: a corner, which is the room's own composition — two walls meeting and a floor
+ * receding. Drawn rather than lettered, and deliberately not a vendor logo: there is no
+ * MacBook in frame, and borrowing another company's mark at the one moment the site should
+ * be asserting Alex's is the wrong trade at any price. */
+.boot__mark {
+  width: 40px;
+  height: 40px;
+  color: var(--accent);
+  animation-name: mark-in;
+  animation-duration: 380ms;
+  animation-delay: calc(var(--boot0) + 120ms);
+  animation-timing-function: var(--ease-camera);
+  animation-fill-mode: both;
+}
+
+@keyframes mark-in {
+  from { opacity: 0; transform: scale(0.86); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The one line that is a statement rather than a measurement, so it gets the weight.
+ * Tracking down from 0.34em — reads as cinematic-terminal rather than a believable
+ * display at that width; ~25% off keeps it a deliberate label without the SYSTEM · ONLINE
+ * spelled-out-letter-by-letter effect. The small metadata (.deck__bar, .deck__rail, the
+ * tile tags) is a different, smaller tier and is left alone — this is about the two or
+ * three *large* statement labels, not the whole mono system. */
+.boot__hail {
+  margin: 0;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.25em;
+  text-indent: 0.25em;   /* the tracking is trailing, so re-centre it */
+  text-transform: uppercase;
+  color: var(--focus-ink);
+  animation-name: line-in;
+  animation-duration: 160ms;
+  animation-delay: calc(var(--boot0) + 340ms);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+.boot__lines {
+  margin: 0;
+  min-width: min(340px, 80vw);
+  font: 12px/1.9 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--focus-ink-soft);
+}
+
+.boot__line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  /* Line by line rather than character by character. A per-character interval is a React
+   * render every 9ms for a flourish nobody is reading, and at 70ms apart the eye reads this
+   * as fast typing anyway.
+   *
+   * The whole list is up ~960ms after --boot0 (i.e. after the screen has held on plain
+   * black for --black-pause-ms) and then *stands* for ~300ms before `boot-out` takes it.
+   * That dwell is the point, and it is what the first version did not have: a self-test
+   * nobody can finish reading is indistinguishable from a glitch. */
+  animation-name: line-in;
+  animation-duration: 140ms;
+  animation-delay: calc(var(--boot0) + 460ms + var(--i) * 70ms);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+@keyframes line-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* The answer, after the leader reaches it rather than racing alongside it — see the note on
+ * `.boot__line::after`. Same stagger as its line plus a fixed offset. */
+.boot__val {
+  animation-name: line-in;
+  animation-duration: 90ms;
+  animation-delay: calc(var(--boot0) + 460ms + var(--i) * 70ms + 200ms);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+/* The dotted leader, so the values line up without a table — and, since it draws itself
+ * rather than just being there, the thing that makes each row read as resolving rather than
+ * arriving finished. Per-character typing was already tried and rejected above; this is the
+ * same idea at the row's own grain: draws left-to-right in the gap between the key fading in
+ * and the value answering it, so the row reads as reaching for its answer instead of a list
+ * cross-fading in. `transform`, not `width` — a transform is compositor-only, no layout.
+ *
+ * First pass had this at 80ms starting 30ms into the key's own fade, which turned out to be
+ * two mistakes at once. It was too fast to register as a sweep rather than a flicker, and
+ * `--focus-line` (#242931, barely off the panel's own #0a0b0d) meant even a slow sweep would
+ * have had almost no contrast to draw with. Fixed both: it now starts once the key has
+ * mostly resolved, takes long enough to actually watch, and lights up in the accent on the
+ * way past before settling to its resting dim tone — a connection landing, not a border
+ * changing width. `.boot__val`'s delay now waits for it to finish rather than overlapping
+ * it, so the row reads as three beats — key, reach, answer — instead of one blur. */
+.boot__line::after {
+  content: '';
+  flex: 1;
+  order: 1;
+  align-self: center;
+  height: 0;
+  border-bottom: 1px dotted var(--focus-line);
+  transform-origin: left center;
+  animation-name: leader-draw;
+  animation-duration: 140ms;
+  animation-delay: calc(var(--boot0) + 460ms + var(--i) * 70ms + 60ms);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+@keyframes leader-draw {
+  0%   { transform: scaleX(0); border-color: var(--accent); }
+  100% { transform: scaleX(1); border-color: var(--focus-line); }
+}
+
+.boot__key { order: 0; }
+.boot__val { order: 2; color: var(--accent); }
+
+/* The last thing on screen, and the only one addressed to a person. Same tracking pass as
+ * .boot__hail, for the same reason — it is the other statement-weight label on this
+ * screen, and leaving it at the old width while SYSTEM ONLINE came down would have made the
+ * two visibly disagree. */
+.boot__ready {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font: 12px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--focus-ink);
+  animation-name: line-in;
+  animation-duration: 140ms;
+  animation-delay: calc(var(--boot0) + 1040ms);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+/* Doing nothing useful, kept because a cursor is what says a machine is waiting rather than
+ * finished. Steps rather than a fade — a cursor that eases is a cursor nobody has ever
+ * seen. It blinks for the rest of the boot and leaves with it. */
+.boot__caret {
+  width: 7px;
+  height: 13px;
+  background: var(--accent);
+  animation-name: caret;
+  animation-duration: 760ms;
+  animation-delay: calc(var(--boot0) + 1040ms);
+  animation-timing-function: steps(1);
+  animation-iteration-count: infinite;
+  animation-fill-mode: both;
+}
+
+@keyframes caret {
+  0%, 55%   { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
+
+/* ---- the bench: a dashboard, not a page ---------------------------------
+ * Room → monitor → project. The room is the person and carries no lists; the monitor is
+ * the index; a project is the detail. This surface is therefore an *index*, and it is laid
+ * out as the machine's own screen would be — an identity bar, a telemetry rail, a grid of
+ * tiles — rather than as the article the /software page already is. */
+
+.deck {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.deck__bar,
+.deck__status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  color: var(--focus-ink-soft);
+  text-transform: uppercase;
+}
+
+.deck__bar {
+  padding: 22px 0 14px;
+  border-bottom: 1px solid var(--focus-line);
+}
+
+.deck__status {
+  padding: 14px 0 20px;
+  border-top: 1px solid var(--focus-line);
+}
+
+/* Down from 0.2em — the full name in caps at wide tracking was the other example that read
+ * as cinematic-terminal rather than desktop chrome. .deck__bar's own 0.14em (the small mono
+ * meta around it — ~/bench, the clock) is untouched; this is the one label in that row
+ * carrying extra weight, not the row's baseline. */
+.deck__id { color: var(--focus-ink); letter-spacing: 0.15em; }
+.deck__spacer { flex: 1; }
+.deck__clock { font-variant-numeric: tabular-nums; }
+
+.deck__led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.deck__close {
+  background: none;
+  border: 1px solid var(--focus-line);
+  border-radius: 5px;
+  padding: 6px 10px;
+  color: var(--focus-ink-soft);
+  font: inherit;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.deck__close:hover { color: var(--focus-ink); border-color: var(--accent); }
+.deck__close kbd { color: var(--accent); font: inherit; }
+
+.deck__body {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 32px;
+  /* Three tiles do not fill a 900px-tall screen, and pinned to the top they read as a page
+   * that failed to finish loading. `safe` so that a viewport too short for the content
+   * still scrolls from the top rather than clipping the first row. */
+  align-content: safe center;
+  padding: 28px 0;
+  min-height: 0;
+  overflow: auto;
+  /* True centre left an unbroken run of empty space above the tiles on anything taller than
+   * it is wide — dead-centre in a 16:9 frame sits low relative to where the eye lands first.
+   * `transform`, not more `padding`, so `safe center`'s short-viewport guarantee is
+   * untouched: this nudges the already-centred result, it does not change what "centred"
+   * means. Set here as the resting value (also what reduced motion falls back to below,
+   * since it disables the animation entirely) and repeated as `settle-body`'s own `to`
+   * state — `animation-fill-mode: both` holds a keyframe's *own* final transform once the
+   * animation ends, so if the two ever disagree this one silently loses while the settle-in
+   * motion is playing, then wins back the instant it finishes. Keep them equal. */
+  transform: translateY(-5%);
+}
+
+/* Everything inside assembles together once the machine is up. One animation on the
+ * container rather than one per element: the tiles stagger on their own below, and two
+ * layers of stagger reads as hesitation.
+ *
+ * `.deck__body` gets its own keyframes rather than sharing `settle` with the bar and the
+ * status strip, because its `to` state also has to land on the -5% rest position above,
+ * not on `none`. */
+.deck__body {
+  animation-name: settle-body;
+  animation-duration: 320ms;
+  animation-delay: var(--t1);
+  animation-timing-function: var(--ease-camera);
+  animation-fill-mode: both;
+}
+
+.deck__bar,
+.deck__status {
+  animation-name: settle;
+  animation-duration: 320ms;
+  animation-delay: var(--t1);
+  animation-timing-function: var(--ease-camera);
+  animation-fill-mode: both;
+}
+
+@keyframes settle {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@keyframes settle-body {
+  from { opacity: 0; transform: translateY(calc(8px - 5%)); }
+  to   { opacity: 1; transform: translateY(-5%); }
+}
+
+/* The telemetry rail: what the machine knows about itself. Small, quiet, and true. */
+.deck__rail {
+  margin: 0;
+  /* Clears the tiles' heading, so the rail's first row sits level with the first tile
+   * rather than with the word above it. */
+  padding-top: 24px;
+  font: 11px/2.1 var(--font-mono);
+  letter-spacing: 0.1em;
+}
+.deck__rail dt { color: var(--focus-ink-soft); text-transform: uppercase; }
+.deck__rail dd { margin: 0 0 14px; color: var(--focus-ink); }
+
+.deck__h {
+  margin: 0 0 12px;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--focus-ink-soft);
+}
+
+.tiles {
+  display: grid;
+  /* Up from 240px/12px — ~12% and ~15%. The empty space above the grid (.deck__body) was
+   * the more obvious problem, but the tiles themselves were also smaller than the space they
+   * had to work with, which is the other half of "developer dashboard" over "window into
+   * the work". */
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: 14px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tile {
+  display: block;
+  height: 100%;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--focus-line);
+  border-radius: 8px;
+  background: var(--focus-surface);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color var(--dur-ui), background var(--dur-ui), transform var(--dur-ui);
+  /* Snap, not drift: the tiles arrive slightly small and land, so the interface assembles
+   * rather than fading up. Short enough to stay under the threshold where it would read as
+   * a page transition. */
+  animation-name: tile-in;
+  animation-duration: 260ms;
+  animation-delay: calc(var(--t1) + 60ms + var(--i) * 55ms);
+  animation-timing-function: var(--ease-camera);
+  animation-fill-mode: both;
+}
+
+@keyframes tile-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* One tile answers after the set has landed — the machine pointing at the newest thing on
+ * the bench. Once, on the border only, and never on a tile the pointer is already on: a
+ * pulse competing with a hover is just a flicker. */
+.tile--latest:not(:hover) {
+  animation-name: tile-in, tile-pulse;
+  animation-duration: 260ms, 900ms;
+  animation-delay:
+    calc(var(--t1) + 60ms + var(--i) * 55ms),
+    calc(var(--t1) + 420ms + var(--i) * 55ms);
+  animation-timing-function: var(--ease-camera), ease-in-out;
+  animation-fill-mode: both, none;
+}
+
+@keyframes tile-pulse {
+  0%, 100% { border-color: var(--focus-line); }
+  40%      { border-color: var(--tile-accent); }
+}
+
+.tile:hover,
+.tile:focus-visible {
+  border-color: var(--tile-accent);
+  background: color-mix(in srgb, var(--tile-accent) 8%, var(--focus-surface));
+  transform: translateY(-2px);
+}
+
+.tile:focus-visible {
+  outline: var(--ring);
+  outline-color: var(--tile-accent);
+  outline-offset: var(--ring-offset);
+}
+
+.tile__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.16em;
+  color: var(--tile-accent);
+}
+
+.tile__status {
+  margin-left: auto;
+  color: var(--focus-ink-soft);
+  letter-spacing: 0.12em;
+}
+
+/* Explicitly block: these are spans, because the tile is a single <a> and a link may not
+ * contain block-level headings. Without this they run together on one line. */
+.tile__name { display: block; margin: 11px 0 4px; font: 600 19px/1.2 var(--font-body); }
+.tile__line { display: block; font: 16px/1.4 var(--font-body); color: var(--focus-ink); }
+.tile__stack {
+  display: block;
+  margin-top: 11px;
+  font: 12px/1.5 var(--font-mono);
+  color: var(--focus-ink-soft);
+}
+
+@media (max-width: 720px) {
+  .deck__body { grid-template-columns: 1fr; gap: 20px; }
+  .deck__rail { display: none; }
+}
+
+/* Rule: reduced motion cuts, it does not animate. The camera already does not move, so
+ * --push never leaves 0 and the canvas filter is inert on its own; the rest is collapsed
+ * here so both halves agree. The boot is motion by definition and does not run at all —
+ * MonitorFocus does not mount it. */
+@media (prefers-reduced-motion: reduce) {
+  .focus--open { animation: none; }
+  /* Still needs to leave, just without the 300ms. Zero duration keeps the class contract
+   * identical so Room.tsx has no reduced-motion branch of its own to keep in step. */
+  .focus--closing { animation-duration: 0ms; }
+  .deck__body,
+  .deck__bar,
+  .deck__status,
+  .tile,
+  /* More specific than .tile, so it needs naming or it keeps its pulse. */
+  .tile--latest:not(:hover) { animation: none; }
+  .tile { transition: none; }
+  /* No introduction and no fade — but the wake is then the only thing saying the room is
+   * interactive, so it appears at once instead of easing. */
+  .hotspot__light { transition: none; }
+}

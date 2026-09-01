@@ -24,7 +24,7 @@ import '../../styles/tokens.css';
       <label>push depth <input type="range" id="travel" min="0.2" max="0.95" step="0.01" value="0.55" /><output id="travelOut">0.55</output></label>
       <label>edge cut <input type="range" id="edgeCut" min="0.02" max="1" step="0.01" value="1" /><output id="edgeCutOut">1.00</output></label>
       <label>parallax <input type="range" id="parallax" min="0" max="0.12" step="0.002" value="0.02" /><output id="parallaxOut">0.020</output></label>
-      <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="0.25" /><output id="lateralOut">0.25</output></label>
+      <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="1" /><output id="lateralOut">1.00</output></label>
       <label>solo <input type="range" id="solo" min="-1" max="2" step="1" value="-1" /><output id="soloOut">all</output></label>
       <p class="hint">click a prop to push into it · Esc pulls back · wheel to dolly · solo isolates one layer</p>
     </aside>
@@ -49,6 +49,8 @@ import '../../styles/tokens.css';
 
     <script>
       import { createRoomRenderer } from '../../scripts/roomRenderer';
+      import { createCameraRig, PLATE, ROOM_TUNING } from '../../scripts/cameraRig';
+      import { screenToImage } from '../../scripts/roomGeometry';
 
       // Back to front. The shell first, then furniture, then what stands on furniture.
       const S = '/art/room-day-summer';
@@ -57,6 +59,8 @@ import '../../styles/tokens.css';
         depthSrc: `${S}-layer${i}-depth.webp`,
       }));
       // Picking needs one depth map covering the whole frame; the per-layer ones are cut.
+      // This is a harness affordance only. The site aims at authored points instead, so it
+      // never downloads this plate or stalls the main thread reading it back.
       const DEPTH = `${S}-depth.webp`;
 
       const canvas = document.getElementById('room') as HTMLCanvasElement;
@@ -75,149 +79,100 @@ import '../../styles/tokens.css';
         const ctx = c.getContext('2d', { willReadFrequently: true })!;
         ctx.drawImage(img, 0, 0);
         const data = ctx.getImageData(0, 0, c.width, c.height).data;
-        // u, v in 0..1 with v measured from the *bottom*, matching the shader's uv.
-        return (u: number, v: number) => {
-          const x = Math.min(c.width - 1, Math.max(0, Math.round(u * (c.width - 1))));
-          const y = Math.min(c.height - 1, Math.max(0, Math.round((1 - v) * (c.height - 1))));
+        // nx, ny normalised on the art, origin top-left — the same convention as
+        // hotspots.ts and roomGeometry.ts, so there is one orientation to remember.
+        return (nx: number, ny: number) => {
+          const x = Math.min(c.width - 1, Math.max(0, Math.round(nx * (c.width - 1))));
+          const y = Math.min(c.height - 1, Math.max(0, Math.round(ny * (c.height - 1))));
           return data[(y * c.width + x) * 4] / 255;
         };
       }
 
       // ?grid=512 to trade geometric detail for framerate without editing code.
       const gridCols = Number(new URLSearchParams(location.search).get('grid')) || undefined;
-      const renderer = await createRoomRenderer({ canvas, layers: LAYERS, gridCols });
+
+      // The rig wants the renderer and the renderer wants the rig's per-frame callback, so
+      // one of them has to be reached through a variable. One rAF is worth the indirection.
+      let rig: ReturnType<typeof createCameraRig> | null = null;
+      let pushing = false;
+
+      const renderer = await createRoomRenderer({
+        canvas,
+        layers: LAYERS,
+        gridCols,
+        onBeforeFrame: (dt) => {
+          rig?.update(dt);
+          if (!rig) return;
+          const reveal = rig.excursionPx();
+          const over = reveal > PLATE.marginPx;
+          status.textContent = `${pushing ? 'push' : 'home'} · excursion `
+            + `${reveal.toFixed(0)}px / ${PLATE.marginPx}px${over ? ' OVER BUDGET' : ''}`;
+          status.style.color = over ? '#ff6b6b' : '';
+        },
+      });
+
       if (!renderer) {
         status.textContent = 'no webgl2 — the site would show the static image here';
       } else {
         const sampleDepth = await depthSampler(DEPTH);
-        const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const tuning = { ...ROOM_TUNING };
+        rig = createCameraRig(renderer, renderer.imageAspect, tuning);
 
-        let nearZ = 1.0, farZ = 6.0, fovDeg = 42, travel = 0.55, parallax = 0.02, lateral = 0.25;
-        // Both of these are properties of the plates on disk, so they move with the
-        // master. They were left at 1024/64 after the master went to 5504px, which made
-        // the readout below under-report every excursion by 5.4x - the harness said
-        // "60px / 64px, fine" while the camera was actually asking for 322px of painted
-        // band that does not exist. Mirror tools/inpaint.py, which now scales --margin
-        // with the plate (64px at its 1024px reference).
-        const PLATE_W = 5504, PLATE_H = 3072;
-        const MARGIN_PX = 344;
-        let pointer = { x: 0, y: 0 };      // -1..1, drives the ambient parallax
-        let dolly = 0;                      // wheel offset along -Z
-        let target: [number, number, number] | null = null;   // the 3D point being pushed into
-        let t = 0;                          // 0 = home, 1 = fully pushed in
-
-        const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
-        const easeInOut = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
-
-        /** Screen point -> the 3D point the depth map puts under it. */
-        function unproject(clientX: number, clientY: number): [number, number, number] {
+        /** Where on the art did the pointer land? Undoes the renderer's cover crop. */
+        function pointOnArt(clientX: number, clientY: number): [number, number] {
           const r = canvas.getBoundingClientRect();
-          // The canvas may be a different aspect than the art; the shader reconstructs in
-          // image space, so map the pointer through the image's own frame.
-          const ndcX = ((clientX - r.left) / r.width) * 2 - 1;
-          const ndcY = 1 - ((clientY - r.top) / r.height) * 2;
-          const u = (ndcX + 1) / 2, v = (ndcY + 1) / 2;
-          const d = sampleDepth(u, v);
-          const z = 1 / lerp(1 / farZ, 1 / nearZ, d);
-          const tanHalf = Math.tan((fovDeg * Math.PI) / 180 / 2);
-          const aspect = canvas.width / canvas.height;
-          return [ndcX * tanHalf * aspect * z, ndcY * tanHalf * z, -z];
+          return screenToImage(clientX - r.left, clientY - r.top, r.width, r.height, renderer!.imageAspect);
         }
 
         canvas.addEventListener('pointermove', (e) => {
           const r = canvas.getBoundingClientRect();
-          pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
-          pointer.y = 1 - ((e.clientY - r.top) / r.height) * 2;
+          rig!.setPointer(
+            ((e.clientX - r.left) / r.width) * 2 - 1,
+            1 - ((e.clientY - r.top) / r.height) * 2,
+          );
         });
 
         canvas.addEventListener('click', (e) => {
-          target = unproject(e.clientX, e.clientY);
+          const [nx, ny] = pointOnArt(e.clientX, e.clientY);
+          // Report what a hotspot entry would need to reproduce this push, so mapping an
+          // aim point is a matter of clicking the thing and reading the console.
+          const disparity = sampleDepth(nx, ny);
+          console.log(`aim: [${nx.toFixed(3)}, ${ny.toFixed(3)}]  depth: ${disparity.toFixed(3)}`);
+          rig!.pushToImagePoint(nx, ny, disparity);
+          pushing = true;
         });
 
         addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') target = null;
+          if (e.key === 'Escape') { rig!.release(); pushing = false; }
         });
 
+        let dolly = 0;
         canvas.addEventListener('wheel', (e) => {
           e.preventDefault();
           dolly = Math.min(1.5, Math.max(-1.5, dolly - e.deltaY * 0.002));
+          rig!.setDolly(dolly);
         }, { passive: false });
-
-        /**
-         * Sideways camera motion is the only thing that uncovers painted background, so
-         * it is the only thing the offline `--margin` has to cover. A point at depth z
-         * shifts by (e / z) / (tanHalf * aspect) in ndc when the eye moves by e, so the
-         * *disocclusion* — near surface against far background — is the difference of
-         * that across the depth range. Reported in plate pixels, which is the unit
-         * --margin is stated in, so the two numbers are directly comparable.
-         */
-        function excursionPx(): number {
-          const e = Math.hypot(cameraOffsetX(), cameraOffsetY());
-          const tanHalf = Math.tan((fovDeg * Math.PI) / 180 / 2);
-          const aspect = PLATE_W / PLATE_H;
-          return (e * (1 / nearZ - 1 / farZ) / (tanHalf * aspect)) * (PLATE_W / 2);
-        }
-        const cameraOffsetX = () => renderer!.camera.eye[0] - renderer!.home.eye[0];
-        const cameraOffsetY = () => renderer!.camera.eye[1] - renderer!.home.eye[1];
-
-        function tick() {
-          // Ease toward or away from the push target. Because this reads a mutable
-          // `target` every frame, a click mid-pull-out just reverses cleanly — that is
-          // the "interruptible mid-move" requirement, and it is free with this shape.
-          const want = target ? 1 : 0;
-          t = reduced ? want : lerp(t, want, 0.06);
-          const k = easeInOut(Math.min(1, Math.max(0, t)));
-
-          const px = pointer.x * parallax * (1 - k);   // ambient parallax fades out as we push
-          const py = pointer.y * parallax * 0.6 * (1 - k);
-          const home: [number, number, number] = [px, py, -dolly];
-
-          const cam = renderer!.camera;
-          if (target) {
-            // Split the push into the part that costs artifacts and the part that does not.
-            //
-            // Rotating the camera reveals no new surface at all, and dollying straight
-            // forward reveals almost none - it mostly magnifies. Translating *sideways* is
-            // what uncovers the hidden area behind foreground objects, and that hidden area
-            // is exactly what the mesh has to smear. So drive the full distance forward,
-            // scale the sideways component by `lateral`, and make up the difference by
-            // turning to look at the target instead of sliding over to it.
-            const ex = home[0] + lateral * (target[0] * travel - home[0]);
-            const ey = home[1] + lateral * (target[1] * travel - home[1]);
-            const ez = target[2] * travel;
-            cam.eye = [lerp(home[0], ex, k), lerp(home[1], ey, k), lerp(home[2], ez, k)];
-            cam.center = [lerp(home[0], target[0], k), lerp(home[1], target[1], k), lerp(home[2] - 1, target[2], k)];
-          } else {
-            cam.eye = home;
-            cam.center = [home[0], home[1], home[2] - 1];
-          }
-          const reveal = excursionPx();
-          const over = reveal > MARGIN_PX;
-          status.textContent = `${target ? 'push' : 'home'} · excursion `
-            + `${reveal.toFixed(0)}px / ${MARGIN_PX}px${over ? ' OVER BUDGET' : ''}`;
-          status.style.color = over ? '#ff6b6b' : '';
-          requestAnimationFrame(tick);
-        }
 
         function bind(id: string, apply: (v: number) => void, fmt = (v: number) => v.toFixed(2)) {
           const el = $(id), o = out(id + 'Out');
           const run = () => { const v = parseFloat(el.value); o.value = fmt(v); apply(v); };
           el.addEventListener('input', run); run();
         }
-        bind('nearZ', (v) => { nearZ = v; renderer.setDepthRange(nearZ, farZ); });
-        bind('farZ', (v) => { farZ = v; renderer.setDepthRange(nearZ, farZ); }, (v) => v.toFixed(1));
-        bind('fov', (v) => { fovDeg = v; renderer.setFov(v); }, (v) => v.toFixed(0));
-        bind('travel', (v) => { travel = v; });
+        // Depth range and fov are duplicated state: the rig needs them to place an aim
+        // point, the renderer needs them to draw. Both get written, from one slider.
+        bind('nearZ', (v) => { tuning.nearZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); });
+        bind('farZ', (v) => { tuning.farZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); }, (v) => v.toFixed(1));
+        bind('fov', (v) => { tuning.fovDeg = v; renderer.setFov(v); }, (v) => v.toFixed(0));
+        bind('travel', (v) => { tuning.travel = v; });
         bind('edgeCut', (v) => { renderer.setEdgeCut(v); });
-        bind('parallax', (v) => { parallax = v; }, (v) => v.toFixed(3));
-        bind('lateral', (v) => { lateral = v; });
+        bind('parallax', (v) => { tuning.parallax = v; }, (v) => v.toFixed(3));
+        bind('lateral', (v) => { tuning.lateral = v; });
         // Isolating a layer is how you tell a bad mask from a bad fill: a hole in the
         // shell is a mask that missed, a smear inside one layer is a layer that is missing.
         bind('solo', (v) => { renderer.setSoloLayer(v); }, (v) => (v < 0 ? 'all' : `L${v}`));
 
         status.textContent = 'home';
         renderer.start();
-        tick();
       }
     </script>
   </body>

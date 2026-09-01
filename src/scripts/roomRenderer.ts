@@ -70,6 +70,16 @@ export interface RoomRendererOptions {
    * black when the camera moves off-axis. Cheap, and invisible if kept small.
    */
   overscan?: number;
+  /**
+   * Called at the top of every frame with the milliseconds since the last one, before the
+   * view-projection is rebuilt — so whatever it writes to `camera` is what gets drawn.
+   *
+   * This exists so the site has exactly *one* rAF. CLAUDE.md rule 1 puts the ambient tier
+   * (idle drift, cursor parallax, dust) "inside its single rAF" precisely so that stopping
+   * the renderer stops all of it; a second loop alongside would keep running in a hidden
+   * tab and survive a focus state mounting. Camera logic is that loop's first client.
+   */
+  onBeforeFrame?(dtMs: number): void;
 }
 
 export interface Camera {
@@ -96,6 +106,12 @@ export interface RoomRenderer {
   /** Draw only layer `i`, or all of them again with -1. Diagnostic. */
   setSoloLayer(index: number): void;
   readonly layerCount: number;
+  /**
+   * Aspect of the art itself, which is what the reconstruction is fixed to. Anything that
+   * has to line up with the painting needs this rather than the canvas's aspect — see
+   * roomGeometry.ts.
+   */
+  readonly imageAspect: number;
   start(): void;
   stop(): void;
   destroy(): void;
@@ -331,6 +347,12 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
   let raf = 0;
   let running = false;
   let solo = -1;
+  let lastFrame = 0;
+  // `running` says whether a frame is queued; `paused` says whether anyone *wants* frames.
+  // They differ while the tab is hidden, and keeping them apart is the whole point: a
+  // focus state that calls stop() must stay stopped across a tab switch, which a single
+  // flag cannot express (the visibility handler would restart it on the way back).
+  let paused = true;
 
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -343,7 +365,10 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     gl!.viewport(0, 0, canvas.width, canvas.height);
   }
 
-  function frame() {
+  function frame(now: number) {
+    const dt = lastFrame === 0 ? 16.7 : Math.min(now - lastFrame, 100);
+    lastFrame = now;
+    opts.onBeforeFrame?.(dt);
     resize();
     const canvasAspect = canvas.width / canvas.height;
     // Reconstruction is fixed to the art's own frame, so the canvas showing a different
@@ -372,22 +397,35 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     if (running) raf = requestAnimationFrame(frame);
   }
 
-  // Rule 1's baseline obligation: never burn GPU on a tab nobody is looking at.
+  // Rule 1's baseline obligation: never burn GPU on a tab nobody is looking at. Note this
+  // only ever touches `running` — a hidden tab suspends the loop, it does not un-pause one
+  // the caller deliberately stopped.
   function onVisibility() {
-    if (document.hidden) stop();
-    else if (!running) start();
+    if (document.hidden) halt();
+    else if (!paused) run();
   }
   document.addEventListener('visibilitychange', onVisibility);
 
-  function start() {
+  function run() {
     if (running || document.hidden) return;
     running = true;
+    lastFrame = 0;
     raf = requestAnimationFrame(frame);
   }
 
-  function stop() {
+  function halt() {
     running = false;
     cancelAnimationFrame(raf);
+  }
+
+  function start() {
+    paused = false;
+    run();
+  }
+
+  function stop() {
+    paused = true;
+    halt();
   }
 
   return {
@@ -395,6 +433,7 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     home,
     canvas,
     layerCount: textures.length,
+    imageAspect,
     setDepthRange(n, f) {
       nearZ = n; farZ = f;
       gl!.uniform1f(u.invNear, 1 / nearZ);

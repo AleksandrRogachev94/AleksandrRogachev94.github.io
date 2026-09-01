@@ -301,10 +301,38 @@ missing from the middle of a large hole, or a wall painted in the wrong place is
 yours to **fix in the fill** — regenerate it, or patch that spot. Run with `--no-anchor`
 to see the plate raw.
 
-## 6. Check it
+## 6. Wakes for the hotspots
+
+The affordance for a clickable object is the object's own light coming up, baked from the
+same SAM masks stage 3 already cut:
 
 ```sh
-npm run dev     # then /dev/room
+tools/.venv/bin/python tools/wake.py --masks art/build/masks --out-dir public/art \
+  --wake monitor=monitor-left --wake window=window-glass
+```
+
+Only objects whose destination is actually built need one. The tool prints two rects per
+hotspot and both go into `src/data/hotspots.ts`: `rect`, the mask's own bounding box, which
+becomes the tap target; and `wakeRect`, where the cropped light sits in the frame. Pasting
+both is what makes the tap target, the light and the camera's aim come from one mask rather
+than three guesses.
+
+The image is cropped to the light's own extent rather than kept full-frame. Full-frame was
+simpler — `mask-size: cover` and no coordinates at all — but the light is `screen`-blended,
+a blend mode takes an element off the compositor's fast path, and at full frame that meant
+every frame of the hover fade repainted the whole room. The fade arrived in two or three
+visible steps. Re-run this stage if the master is ever re-exported at a different crop.
+
+This replaced a rim light traced on the silhouette. The rim looked right in a still and
+failed in motion: it is a screen-space overlay over art that parallax keeps nudging, and a
+hairline unglues from its edge with two or three pixels of drift. Soft light has no such
+failure mode. Weights matter — the fill is deliberately weak (0.45) so the painted screen
+keeps its sheen; at 0.85 the panel goes flat accent and the art underneath stops existing.
+
+## 7. Check it
+
+```sh
+npm run dev     # then / for the hotspots and the push, /dev/room to tune the camera
 ```
 
 ## Starting over

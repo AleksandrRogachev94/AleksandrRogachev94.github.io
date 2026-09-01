@@ -202,6 +202,90 @@ derived offline, plus a close-up for each hotspot. Two hand-drawn masks are the 
 step; everything else regenerates from the master. **Build against flat placeholder blocks first** — art drops in
 with no code changes.
 
+
+### The last stretch is the screen's, not the camera's
+
+Settled after building it the other way twice. The push stops with the monitor filling
+~80% of the frame and **never travels the rest** — that stretch is pure disocclusion, which
+is the one thing a displaced mesh cannot invent. The remaining distance is covered by the
+monitor's *screen*: the panel arrives at exactly the rectangle the screen has reached, lit,
+as though its backlight had come up, and then pushes its own edges off the frame. Move
+toward the monitor; transition through the screen. `roomGeometry.pushedRectToScreen` is
+what makes the two rectangles the same rectangle.
+
+Two things were built and removed, and should not come back:
+
+- **A full-frame accent vignette closing in during the approach.** It reads as a circle
+  sliding over the picture — a transition effect announcing itself, and nothing the room
+  would ever do. The room stays completely untouched for the first half of the push, and a
+  blur-and-dim veil ramps in over the second half; that is the whole of the artifact cover.
+- **A circular iris for the takeover.** Same objection. An iris says "a new page is
+  arriving"; a rectangle that starts as the screen says "you are looking at the screen now".
+
+#### It is one motion, and that is a timing property
+
+The handoff is invisible only if nothing arrives twice. Getting there cost three fixes, all
+recorded in `src/scripts/transition.ts`, and each one is a thing not to undo:
+
+- **The camera push has a duration, not a decay rate.** An exponential approach never
+  finishes, so its last stretch reads as hesitation, nothing downstream can be told when the
+  move is over, and the panel — which is sized for a *completed* push — arrives a few
+  percent too large for the screen it is supposed to be growing out of.
+- **One timeline, shared.** `transition.ts` owns the numbers; Room.tsx writes them onto the
+  room as custom properties and the rig imports them. The stylesheet never guesses when the
+  camera will be done. It used to guess 600ms, and the guess was wrong in both directions
+  depending on the frame rate.
+- **The ease does not come to a stop, and the panel does not fade in.** The camera's curve
+  is blended a quarter of the way to linear so it still has velocity at the handoff, and the
+  panel steps to opaque in half a percent of its duration rather than spending a quarter of
+  it fading up at a fixed size. That fade was a 95ms hold in the middle of a move — the
+  stall that made the whole thing read as two steps.
+
+The exit is the same claim in reverse: the panel clears in a fifth of the retreat so the
+pull-back happens in the open.
+
+**The pull-back has to actually move the camera, and for a long time it did not.**
+`release()` cleared the rig's target, and the next frame fell through to the "at home"
+branch and *teleported*. It was invisible in the code and invisible in review, because
+everything around it looked alive: `t` went on decaying over the full release duration,
+`progress()` went on reporting it, and the blur that reads `progress()` went on lifting. So
+the exit looked like a room that unblurs rather than a room you retreat into, and two
+successive attempts to fix it by retiming the release changed only the blur. **The target
+must outlive the release and only be retired once `t` is back at 0.** If the exit ever
+looks static again, check what the camera is doing before touching a duration.
+
+### The bench boots, once
+
+Reversed from the earlier position that a boot screen is a gate. The objection holds
+against a *login* — something to click through — and not against a **power-on**: nothing
+waits on it, there is nothing to dismiss, it is over in ~1.3s, and it plays once per page
+load, so bouncing between the bench and a project does not replay it. It earns its place by
+finishing a causal chain the camera move alone leaves open — the monitor is an object in a
+room, and clicking an object in a room should turn it on. The lines are a self-test and
+every one of them is true of the page behind it (`projects.ts` supplies the count, the
+renderer line reports what actually initialised), which is what keeps it from being theatre.
+
+Not a vendor logo, not a fake OS, no progress bar counting to 100%.
+
+**The backlight flare is an ignition, not a wash.** The first build had it decaying over
+760ms — a full-frame sheet of accent laid across the boot for the whole of the boot's life,
+while the boot's own lines faded up underneath it. Both were on screen and the sequence was
+invisible: the machine appeared not to boot at all. The flare now spikes in ~30ms and is
+gone before the first line arrives, which is also what a backlight actually does. Anything
+that dims the boot must finish before the boot speaks.
+
+**The lines need dwell.** They stagger in over ~460ms and then *stand* for ~300ms before
+the panel takes them. A self-test nobody can finish reading is indistinguishable from a
+glitch.
+
+### The monitor is the second navigation layer
+
+Room → monitor → project. The room is the person and carries no lists; the monitor is the
+index; a project is the detail. So the bench is laid out as a machine's own screen — an
+identity bar, a telemetry rail, a grid of tiles — and not as the article `/software`
+already is. Collapsing it back into that article would waste the one surface in the site
+that can plausibly be a screen.
+
 ## Room controls — a second interaction grammar
 
 Hotspots mean *the camera pushes in*. Some objects should respond **without taking you

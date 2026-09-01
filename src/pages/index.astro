@@ -1,9 +1,12 @@
 ---
 import '../styles/tokens.css';
+import '../styles/room.css';
+import Room from '../components/Room.tsx';
 
-// Scaffold placeholder. The room renderer mounts on top of this document in a later
-// step; the document itself is never replaced (CLAUDE.md rule 2 — the document is real,
-// and it is simultaneously the SEO, accessibility and reduced-motion layer).
+// The room is one screenful at the top of a real page — it is not a replacement for the
+// document and never hides it. Scroll past the room and the prose below is the same
+// content the hotspots navigate to, server-rendered: the SEO layer, the screen-reader
+// layer and the no-JS fallback, all at once (CLAUDE.md rule 2).
 const title = 'Alex Rogachev';
 const description = 'Software, computer vision, and things built indoors.';
 ---
@@ -19,10 +22,42 @@ const description = 'Software, computer vision, and things built indoors.';
     <meta name="description" content={description} />
   </head>
   <body>
-    <main>
+    <Room client:load />
+
+    <main class="doc">
       <h1>{title}</h1>
-      <p>{description}</p>
-      <p><em>Scaffold only — the room is not built yet.</em></p>
+      <p class="doc__lede">{description}</p>
+
+      <section id="software">
+        <h2>The software bench</h2>
+        <p>
+          Things that exist only as code live on the monitor. It is not one project — it is
+          a bench that several sit on, each with its own page.
+        </p>
+        <p><a href="/software">Open the software bench →</a></p>
+      </section>
+
+      <section id="birdlense">
+        <h2>BirdLense</h2>
+        <p>
+          A smart bird feeder in the yard outside the window: YOLO and ByteTrack for
+          detection and tracking, BirdNET for the calls. It is a physical thing, so it has a
+          physical address in the room.
+        </p>
+      </section>
     </main>
+
+    <style>
+      .doc {
+        max-width: 62ch;
+        margin: 0 auto;
+        padding: 64px 24px 96px;
+      }
+      .doc h1 { font-size: 2rem; margin: 0 0 0.25em; }
+      .doc__lede { color: var(--room-ink-soft); font-size: 1.1rem; margin-top: 0; }
+      .doc section { margin-top: 48px; }
+      .doc h2 { font-size: 1.25rem; margin: 0 0 0.4em; }
+      .doc a { color: var(--room-ink); text-underline-offset: 3px; }
+    </style>
   </body>
 </html>
