@@ -229,8 +229,21 @@ def anchor_to_master(bgr, fill, hole, ring=64, solve_scale=0.25):
     of a large hole - a membrane is smooth by definition. It fixes the level, not the
     drawing. A fill with an invented object in it is still a fill to regenerate.
 
-    `ring` is where the residual is read. It sits outside `hole`, which is already the
-    footprint grown by `halo`, so it never samples an object's own contact shadow.
+    `ring` is where the residual is read, just outside whatever region is passed in - and
+    which region that is differs by caller, deliberately.
+
+    A hand-made fill is anchored against `hole`, because a generator repaints the whole
+    thing and the question is whether its lighting agrees with the master's; reading the
+    residual outside the halo keeps an object's own contact shadow out of the sample.
+
+    The LaMa path anchors against `keep` instead, because there the seam is somewhere
+    else entirely. LaMa is asked to fill `hole` and only `keep` is pasted back, so its
+    answer was made continuous with its own work in the halo ring and then meets the
+    master there. Anchoring on `hole` would leave that step untouched - it corrects a
+    boundary that is not the one being cut. Reading the residual inside the halo ring does
+    sample the contact shadow, and here that is correct rather than a leak: the halo ring
+    is master paint in the composite, visible at the home camera, so the shadow is what
+    the fill genuinely has to meet.
     The solve runs at `solve_scale` because the answer is a membrane and a membrane has
     nothing above the low frequencies to resolve.
     """
@@ -341,12 +354,16 @@ def main() -> None:
                          "which is the ghost outline around every object. Widening the "
                          "blank alone would just move the seam - the two have to move "
                          "together, which is what makes the composite still reproduce the "
-                         "master at rest. Does NOT scale with the plate - see main().")
+                         "master at rest. Does NOT scale with the plate - see main(); the "
+                         "painted edge is a few px wide at any resolution, and widening "
+                         "this past it manufactures a collar that travels with the "
+                         "object.")
     ap.add_argument("--halo", type=int, default=None,
                     help="px the inpaint mask is grown before filling. Must clear the "
                          "object's contact shadow and anti-aliased edge, or LaMa reads "
                          "them as context and paints the object back in. Cheap to raise; "
-                         "too small is what ghosting looks like.")
+                         "too small is what ghosting looks like, and shrinking it to buy "
+                         "a shallower hole was measured and is worse - see main().")
     ap.add_argument("--depth-pad", type=int, default=None,
                     help="MINIMUM px a layer's own depth is extended outward past its "
                          "alpha; the actual reach is derived per pixel from the local "
@@ -395,25 +412,72 @@ def main() -> None:
     #
     #   margin    is an excursion budget, and the excursion is reported in plate px -
     #             it scales with the plate by construction.
-    #   halo      has to clear an object's contact shadow, which is a feature of the
-    #             room and grows with the picture.
     #   depth-pad has to clear the stretch, and the stretch is proportional to margin.
     #
     #   feather   tracks the width of the painted edge itself, and a generator asked for
     #             a bigger image draws a *sharper* edge, not a proportionally softer one.
-    #             Measured on this 5504px master, the blend outside the masks is down to
-    #             ~30% of the way to object colour by 4px and flat after that - the same
-    #             few px it was on the 1024px one. Scaling it to 32px was measurably
-    #             wrong: it hands ViTMatte a 32px band where the true answer is opaque
-    #             background, and the matte returns a wide soft halo that carries real
-    #             background texture away with the object when the camera moves.
+    #             It is 4px on any plate.
+    #
+    #             Scaling it was tried, on the argument that the band also decides how far
+    #             the surface behind is blanked, so it must clear the object's soft rim and
+    #             contact shadow rather than just its anti-aliasing. The supporting
+    #             measurement - "the master is still object-coloured 24-48px out" - was
+    #             wrong. It compared each object against its own interior colour over a
+    #             wide window, which on a lacy plant is measuring the NEXT LEAF, not one
+    #             leaf's edge.
+    #
+    #             Sampled properly, along the outward normal of the mask, in the master
+    #             alone, with no fill involved, the fig's edge is:
+    #
+    #                 -6px  -3px   0px  +3px  +6px  +10px  +18px  +32px  +80px
+    #                 -0.01  0.01  0.67  0.98  0.99   1.01   1.03   1.02   0.98
+    #
+    #             (0.0 = leaf colour, 1.0 = clean background.) Leaf to background in three
+    #             pixels. There is no soft rim, no defocus tail and no glow to clear.
+    #
+    #             Which makes the "soft alpha" a wider band produces entirely manufactured,
+    #             and it is a motion artifact. Blanking N px of real background out of the
+    #             plate behind leaves matte() reconstructing it from the object, so the
+    #             object is charged ~30% alpha across the whole ring - a hard-edged collar
+    #             that travels with it. It is invisible at rest (the recovered foreground
+    #             is exact by construction) and obvious the moment the camera drifts. What
+    #             the fig carries 4-12px outside its own mask, by feather:
+    #
+    #                 feather |    3 |    4 |    6 |   16
+    #                   alpha | 0.00 | 0.01 | 0.08 | 0.31
+    #
+    #             Linear in feather, because it IS feather. 4 spans the measured 3px
+    #             transition with a px in hand and leaves the collar at 0.01.
+    #   halo      has to clear an object's contact shadow, which is a feature of the
+    #             room and grows with the picture.
+    #
+    # Not scaling `halo` was tried and is worse, which is worth recording because the
+    # argument for it is good. Dilating the footprint is what makes a hole deep, and hole
+    # depth is the one number that decides whether a fill is a picture or a wash: 64px of
+    # halo closes every gap between the fig's leaves and takes its hole from 385 plate px
+    # deep to 862, which is what drags that one fill down to 0.26x scale. Cutting halo to
+    # a fixed 12 does exactly what it promises to the geometry - the fig's hole drops to
+    # 220 model px deep and stops being downsampled at all - and the fill still gets
+    # WORSE, because the rim it stops excluding is object-coloured and LaMa faithfully
+    # continues it inward. Measured over all fifteen objects, in the 0-150px band the
+    # camera actually reveals:
+    #
+    #                          halo 64   halo 12
+    #     mean detail ratio       0.70      0.59
+    #     ghosting, guitar       0.046     0.298
+    #     ghosting, robot        0.029     0.344
+    #     ghosting, wall-shelf   0.154     0.407
+    #
+    # So the contamination costs more than the depth buys, and it costs most on exactly
+    # the objects that were cleanest. Depth is not the only thing that decides a fill;
+    # what surrounds the hole has to be background, and a rim of object is not.
     REF_W = 1024
     k = bgr.shape[1] / REF_W
     for name, ref in (("margin", 64), ("halo", 12), ("depth_pad", 8)):
         if getattr(args, name) is None:
             setattr(args, name, max(1, round(ref * k)))
     if args.feather is None:
-        args.feather = 6
+        args.feather = 4
     print(f"plate {bgr.shape[1]}x{bgr.shape[0]} = {k:.2f}x the {REF_W}px reference   "
           f"margin {args.margin}  feather {args.feather}  halo {args.halo}  "
           f"depth-pad {args.depth_pad}  fill-reach {args.fill_reach}")
@@ -450,6 +514,12 @@ def main() -> None:
     ring = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * args.halo + 1,) * 2)
     reach = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * args.margin + 1,) * 2)
     trust = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    # A separate, wider erosion for the foreground estimate than for the depth pad. The
+    # two want opposite things: `nearest_colour` must sample paint that is unambiguously
+    # object, so it has to start further in than the soft band reaches, while the depth
+    # pad wants to trust as much of a thin structure as it can. Sharing one kernel meant
+    # widening it fixed the first and broke the second.
+    fgtrust = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * (args.feather + 3) + 1,) * 2)
     soft = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * args.feather + 1,) * 2)
 
     plates = []
@@ -532,8 +602,30 @@ def main() -> None:
                 if rest.any():
                     print(f"      {'leftover':<14} {100.0 * (rest > 0).mean():.1f}% of frame")
                     work = lama_fill(get_lama(), work, rest, reach=args.fill_reach)
+                # Anchor on `keep`, which is the boundary that is actually cut, and NOT on
+                # `hole`. Anchoring on `hole` is provably a no-op: `lama_fill` composites,
+                # so outside the hole the work is bit-identical to the master and the
+                # residual ring is exactly zero (measured +0.0 on both layers).
+                #
+                # `keep` is different. LaMa fills the footprint grown by `halo` and only
+                # the footprint is pasted back, so the fill was made continuous with its
+                # own answer in the halo ring and then meets real paint there instead. The
+                # step traces the silhouette and stays put while the object moves - a leaf
+                # -shaped contour standing off the leaf with revealed fill between them.
+                # It is invisible at rest, because that boundary sits under the layer in
+                # front of it, and it is the first thing the eye finds once the camera
+                # drifts.
+                #
+                # `solve_scale` is the whole difference between this working and not. At
+                # the 0.25 default the correction is a membrane far too coarse to follow a
+                # lacy contour and the seam barely moves (17.0 -> 16.3). Solved at full
+                # resolution it lands on the contour it has to cancel.
+                if args.anchor:
+                    work, moved = anchor_to_master(bgr, work, keep.astype(np.uint8) * 255,
+                                                   ring=args.halo, solve_scale=1.0)
                 color_r = np.where(keep[..., None], work, bgr)
-                source = f"lama, {len(jobs)} objects one at a time"
+                source = (f"lama, {len(jobs)} objects one at a time"
+                          + (f", seam anchored {moved:.1f}" if args.anchor else ""))
             # Depth, unlike colour, owes nothing to the at-rest frame: at the reference
             # viewpoint every depth reprojects to the same pixel, so rewriting it is
             # invisible until the camera moves. That frees the depth fill to cover the
@@ -578,9 +670,20 @@ def main() -> None:
             # foreground across the band, the surface behind is blanked over the same
             # band, and the two reconstruct the master exactly at rest while separating
             # cleanly in motion.
-            band_out = ((cv2.dilate(masks[r].astype(np.uint8), soft) > 0)
-                        & ~masks[r] & ~band)
-            soft_a, color_r = matte(color_r, under, masks[r], band_out, trust)
+            # Symmetric about the boundary, not one-sided. The band used to stop at the
+            # mask, on the reading that everything inside it is object - but a mask
+            # boundary is placed somewhere inside a silhouette that is genuinely several
+            # px of blend, so the blend continues INWARD from wherever it lands. Measured
+            # on this master, the first ring inside the fg-plant's mask is still about 45%
+            # background and the second about 33%, and all of it was being carried at
+            # alpha 1.0. That is the mirror image of the ghost outline the outward band
+            # was written to remove: instead of object left behind on the wall, it is wall
+            # dragged along with the object, and it reads as a pale rim travelling with
+            # every leaf. Solve for the fraction on both sides.
+            inner_edge = masks[r] & ~(cv2.erode(masks[r].astype(np.uint8), soft) > 0)
+            band_out = ((((cv2.dilate(masks[r].astype(np.uint8), soft) > 0) & ~masks[r])
+                         | inner_edge) & ~band)
+            soft_a, color_r = matte(color_r, under, masks[r], band_out, fgtrust)
             soft_a[band] = 1.0  # the margin band is real fill, not a silhouette
             alpha = (soft_a * 255 + 0.5).astype(np.uint8)
             # See --depth-pad. The depth model's edges are soft, so the outermost few px

@@ -15,6 +15,8 @@ structural changes — it records _why_ several obvious-looking ideas were rejec
 re-proposing them wastes everyone's time. Art generation prompts are in
 [docs/PROMPTS.md](docs/PROMPTS.md). To build a scene, follow [docs/SCENE.md](docs/SCENE.md);
 [docs/PIPELINE.md](docs/PIPELINE.md) is why that runbook is shaped the way it is.
+[docs/FILL.md](docs/FILL.md) is where the current quality work is: the visible artifact was
+the composite seam, not the inpainter, and it records what that cost to find.
 
 Implement functionality step-by-step and educational, explaining what and why at each step. Do not try to implement everything in one go. The user is new to astro framework and wants to learn.
 
@@ -142,6 +144,52 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
 - Widening `--halo` to chase "ghosts". The soft object-shaped tone on a wall is that
   object's cast shadow and it belongs there. On the guitar: 64px keeps the shadow, 192px
   scrubs it off, 384px loses the room corner.
+- **Widening `--feather` past the painted edge.** It sets the soft-alpha band *and* how far
+  the surface behind a layer is blanked, and blanking real background obliges `matte()` to
+  rebuild it from the object — a hard-edged, ~30%-opaque collar welded to every silhouette
+  that travels with it. Invisible at rest, obvious under drift. Sampled along the mask's
+  outward normal in the master alone, the fig's edge runs leaf → clean background in **three
+  pixels** (0.01 at -3px, 0.67 at 0, 0.98 at +3, flat thereafter): there is no soft rim,
+  defocus tail or glow to clear. The fig's collar alpha 4-12px out is 0.00/0.01/0.08/0.31 at
+  feather 3/4/6/16 — linear, because it *is* feather. It does not scale with the plate; a
+  generator asked for a bigger image draws a sharper edge. Shipping 4.
+- **Measuring an edge by object-colouredness against local background.** On a lacy plant a
+  wide comparison window measures the *next leaf*, not one leaf's edge. It reported the
+  master as object-coloured 24-48px out, which justified widening feather and made the room
+  worse. Sample along the normal instead.
+- **Trusting at-rest exactness as evidence the plates are right.** `matte()` makes the
+  composite exact at rest *by construction* — the recovered foreground compensates for
+  whatever was blanked — so at-rest error says nothing about motion. It sat at 0.03/255
+  while the room looked wrong. Bisect a suspected artifact with `prefers-reduced-motion`
+  first: it zeroes drift and parallax, and separates static bugs from motion ones in one
+  step.
+- **Grading the fill across the halo ring** to hide the layer-0 seam. Kills the step and
+  breaks at-rest, 0.03 → 1.56/255 — that ring is visible at the home camera and grading it
+  blanks genuine background. The seam's actual fix is `anchor_to_master` on `keep` at
+  `solve_scale=1.0`, which cuts the leaf-shaped contour from 22.5 to 6.7 mean; anchoring on
+  `hole` instead is provably a no-op because `lama_fill` composites.
+- **Measuring a composite seam by comparing the fill to the master.** Inside `keep` the
+  master *is* the object, so that compares fill against leaf; and defining the boundary as
+  "where layer 0 differs from the master" makes the number shrink the boundary rather than
+  improve. Both dismissed the anchor fix. Measure the discontinuity *within* layer 0 across
+  a boundary derived from the masks — that is what the eye sees.
+- **Judging a fill by high-frequency energy.** The "detail ratio" metric cannot tell
+  hallucinated texture from correct texture, punishes a fill for being smooth where the
+  surface is smooth, and never detected the artifact that was the actual complaint.
+  Several entries in this list rest on it and are worth re-checking by eye before being
+  cited. Look at the picture.
+- **Narrowing `--halo` to buy a shallower hole**, or stopping it scaling with the plate.
+  The argument for it is good and the measurement refutes it. Dilating the footprint is
+  what makes a hole deep, and depth from real paint is what decides whether a fill is a
+  picture or a wash — 64px of halo closes every gap between the fig's leaves and takes its
+  hole from 385 plate px deep to 862, which is the whole reason that one fill runs at
+  0.26x. Cutting halo to a fixed 12 delivers exactly that: the fig stops being downsampled
+  at all. The fill still gets **worse**. Over all fifteen objects, in the 0–150px band the
+  camera actually reveals, mean detail ratio falls 0.70 → 0.59, and ghosting rises most on
+  the objects that were cleanest (guitar 0.046 → 0.298, robot 0.029 → 0.344, wall-shelf
+  0.154 → 0.407). The rim halo stops excluding is object-coloured, and LaMa faithfully
+  continues it inward. Depth is not the only thing that decides a fill: what surrounds the
+  hole has to *be* background, and a rim of object is not.
 - Grouping layers by depth range, or inferring what-hides-what from the depth map. Both
   were built and measured. Depth range puts the printer and the cabinet it stands on in
   one layer. Inference dies on contact edges: an object standing on a surface shares a
