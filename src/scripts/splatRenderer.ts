@@ -71,6 +71,26 @@ export interface SplatRendererOptions {
    * camera magnifies it. The prototype's 0.3 is the value Alex looked at.
    */
   dilate?: number;
+  /**
+   * Ceiling on the drawing buffer, in device pixels.
+   *
+   * 3.2M is Alex's own judgement, transcribed: on a 1710x814 CSS window he put the lowest
+   * acceptable render scale at 0.70-0.80 of dpr 2, and 0.75 of that window is 3.13M. Stated
+   * as an area rather than as the scale he moved, so that the same verdict carries to a
+   * window he did not test.
+   *
+   * The one lever that reduces cost without changing which splats are drawn or how they
+   * compose — it can only cost sharpness, never coverage. It is worth having because the
+   * field has far less resolution than a Retina buffer can show: SHARP's grid is 768x768
+   * per layer, so at the home camera a splat is ~2 device px across at dpr 2. Above all it
+   * bounds the damage on a 5K display, where dpr 2 asks for 4x the fragments of a laptop
+   * for a reconstruction that has no more detail to give.
+   *
+   * A pixel budget rather than a dpr cap because the cost is the buffer's *area*, and dpr
+   * alone does not determine that — a 5K monitor at dpr 2 and a laptop at dpr 2 differ by
+   * 4x.
+   */
+  maxPixels?: number;
   /** See RoomRendererOptions.onBeforeFrame — the site has exactly one rAF and this is it. */
   onBeforeFrame?(dtMs: number): void;
 }
@@ -109,9 +129,15 @@ uniform vec2  uScaleLog;       // scaleLogLo, scaleLogHi
 in vec2 aCorner;
 in uint aIndex;
 
-out vec4 vColor;
-out vec3 vConic;
-out vec2 vCenterPx;
+// flat, because all four corners of a quad carry the same colour. An interpolated varying
+// costs the tiler a gradient per component per triangle; a flat one is stored once from the
+// provoking vertex. On a tile-based GPU drawing 2.4M triangles a frame, what the vertex
+// stage hands to the fragment stage is bandwidth, and this scene has no other use for it.
+flat out mediump vec4 vColor;
+// The corner's position in the ellipse's own normalised frame: |vQuad| = 1 is the quad's
+// edge. The one thing here that genuinely varies across the quad, and the reason this
+// replaces a conic and a centre.
+out mediump vec2 vQuad;
 
 ivec2 texelOf(uint i) { return ivec2(int(i) % uGrid, int(i) / uGrid); }
 
@@ -154,11 +180,31 @@ void main() {
   vColor = texelFetch(uColor, tx, 0);
   if (vColor.a <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
 
+  float iz = 1.0 / p.z;
+  vec2 centerPx = vec2(uFocal.x * p.x * iz + uCenter.x, uFocal.y * p.y * iz + uCenter.y);
+  vec3 s = exp(mix(vec3(uScaleLog.x), vec3(uScaleLog.y), texelFetch(uShape, tx, 0).rgb));
+
+  // ---- off-screen, cheaply ------------------------------------------------------------
+  // The room is drawn object-fit: cover, so a window that is not the master's 16:9 crops
+  // one axis away entirely — at a 2.10 aspect that is 15% of the splats, every one of them
+  // taken through the covariance rebuild and the projection before the clipper threw the
+  // quad away.
+  //
+  // A quad's half-extent is bounded without building the covariance at all: however the
+  // ellipsoid is rotated, its projection cannot exceed its largest world axis, and the
+  // dilation adds sqrt(uDilate). So this needs the scale — which is one fetch and is wanted
+  // anyway — and not the rotation, which is the expensive half. Conservative, so nothing
+  // that would have drawn a pixel is dropped.
+  float cullRad = uSigma * (uFocal.x * max(max(s.x, s.y), s.z) * iz + sqrt(uDilate)) + 1.0;
+  if (centerPx.x + cullRad < 0.0 || centerPx.x - cullRad > uViewport.x
+      || centerPx.y + cullRad < 0.0 || centerPx.y - cullRad > uViewport.y) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return;
+  }
+
   // ---- 3D covariance, rebuilt from scale and rotation --------------------------------
   // Done here rather than precomputed on the CPU at load: precomputing needs two RGBA32F
   // textures (37MB of GPU memory for this scene) and a 1.2M-iteration JS loop before the
   // first frame can draw. The GPU rebuilds it per vertex for free.
-  vec3 s = exp(mix(vec3(uScaleLog.x), vec3(uScaleLog.y), texelFetch(uShape, tx, 0).rgb));
   vec4 q = normalize(texelFetch(uQuat, tx, 0) * (255.0 / 127.0) - (128.0 / 127.0));
   float w = q.x, x = q.y, y = q.z, zz = q.w;
   mat3 R = mat3(
@@ -166,18 +212,30 @@ void main() {
     2.0 * (x * y - w * zz),        1.0 - 2.0 * (x * x + zz * zz), 2.0 * (y * zz + w * x),
     2.0 * (x * zz + w * y),        2.0 * (y * zz - w * x),       1.0 - 2.0 * (x * x + y * y));
   mat3 M = uView * R;                       // world scale axes, expressed in view space
-  mat3 Vrk = M * mat3(s.x * s.x, 0.0, 0.0,
-                      0.0, s.y * s.y, 0.0,
-                      0.0, 0.0, s.z * s.z) * transpose(M);
+  // Vrk = M * diag(s^2) * M^T, written out for its six distinct entries instead of as two
+  // mat3 products. It is symmetric by construction, so a general 3x3 multiply computes
+  // three of the nine entries twice and the compiler cannot know that.
+  // Mt[i] is the i-th ROW of M (a mat3 subscript selects a column), and Vrk_ij is
+  // sum_k s2_k * M_ik * M_jk — a dot product of two rows weighted by s2.
+  vec3 s2 = s * s;
+  mat3 Mt = transpose(M);
+  vec3 ms0 = Mt[0] * s2, ms1 = Mt[1] * s2, ms2 = Mt[2] * s2;
+  float v00 = dot(ms0, Mt[0]), v01 = dot(ms0, Mt[1]), v02 = dot(ms0, Mt[2]);
+  float v11 = dot(ms1, Mt[1]), v12 = dot(ms1, Mt[2]), v22 = dot(ms2, Mt[2]);
 
   // ---- project it ---------------------------------------------------------------------
-  float iz = 1.0 / p.z;
-  mat3 J = mat3(uFocal.x * iz, 0.0, 0.0,
-                0.0, uFocal.y * iz, 0.0,
-                -uFocal.x * p.x * iz * iz, -uFocal.y * p.y * iz * iz, 0.0);
-  // J is built in true (row) form here, so the projection is J*Vrk*J^T directly. The
-  // reference shaders build J transposed and write transpose(T)*Vrk*T instead.
-  mat3 C = J * Vrk * transpose(J);
+  // Only the top-left 2x2 of J*Vrk*J^T is ever read, and J's bottom row is zero, so the
+  // full 3x3 product computes a row and a column that nothing uses. Carrying J as its two
+  // meaningful rows takes this from two mat3 products to eighteen multiplies.
+  vec3 j0 = vec3(uFocal.x * iz, 0.0, -uFocal.x * p.x * iz * iz);
+  vec3 j1 = vec3(0.0, uFocal.y * iz, -uFocal.y * p.y * iz * iz);
+  vec3 r0 = vec3(dot(j0, vec3(v00, v01, v02)),
+                 dot(j0, vec3(v01, v11, v12)),
+                 dot(j0, vec3(v02, v12, v22)));
+  vec3 r1 = vec3(dot(j1, vec3(v00, v01, v02)),
+                 dot(j1, vec3(v01, v11, v12)),
+                 dot(j1, vec3(v02, v12, v22)));
+  mat2 C = mat2(dot(r0, j0), dot(r1, j0), dot(r0, j1), dot(r1, j1));
 
   // uDilate stops a splat falling below a pixel, but widening a Gaussian without dimming
   // it also raises the total light it emits, which promotes a sub-pixel splat into a small
@@ -193,40 +251,59 @@ void main() {
   float det = a * c - b * b;
   if (det <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   float compensation = sqrt(max(detOrig, 0.0) / det);
-  vConic = vec3(c, -b, a) / det;
 
   float mid = 0.5 * (a + c), rad = sqrt(max(mid * mid - det, 0.0));
-  float l1 = mid + rad, l2 = max(mid - rad, 0.1);
+  float l1 = mid + rad, l2 = max(mid - rad, 1e-6);
   if (uSigma * sqrt(l1) > 1024.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
 
   // Oriented quad. An axis-aligned square of half-extent = the major axis costs ~2.4x the
   // fragments the ellipse needs at the elongations here, and far worse at 45 degrees.
   vec2 e1 = (abs(b) < 1e-9) ? (a >= c ? vec2(1.0, 0.0) : vec2(0.0, 1.0))
                             : normalize(vec2(b, l1 - a));
+  // The quad is built on the covariance's own eigenvectors, so a corner at parameter
+  // (u, v) sits at Mahalanobis distance^2 = uSigma^2 * (u*u + v*v) — the cross term
+  // vanishes in the eigenbasis, and the eigenvalues cancel against the axis lengths. That
+  // identity is what lets the fragment shader below drop the conic entirely and evaluate
+  // one dot product on a value the rasteriser interpolates for free, instead of rebuilding
+  // an offset from gl_FragCoord and running a full quadratic form on it. The old form
+  // carried five interpolated floats to do that; this carries two.
+  //
+  // l2 is clamped away from zero so a degenerate needle cannot divide by it. ky is 1 in
+  // every case that clamp does not fire, which with the default dilate of 0.3 is all of
+  // them — adding uDilate to the diagonal raises both eigenvalues by uDilate.
+  float l2c = max(l2, 0.1);
+  float ky = sqrt(l2c / l2);
   vec2 major = e1 * (uSigma * sqrt(l1));
-  vec2 minor = vec2(-e1.y, e1.x) * (uSigma * sqrt(l2));
-  vec2 centerPx = vec2(uFocal.x * p.x * iz + uCenter.x, uFocal.y * p.y * iz + uCenter.y);
+  vec2 minor = vec2(-e1.y, e1.x) * (uSigma * sqrt(l2c));
   vec2 corner = centerPx + aCorner.x * major + aCorner.y * minor;
 
-  vCenterPx = centerPx;
+  vQuad = vec2(aCorner.x, aCorner.y * ky);
   vColor.a *= compensation;
   gl_Position = vec4(2.0 * corner.x / uViewport.x - 1.0,
                      1.0 - 2.0 * corner.y / uViewport.y, 0.0, 1.0);
 }`;
 
+/**
+ * mediump throughout, and one dot product.
+ *
+ * This shader runs tens of millions of times a frame — the field is ~1.2M quads over a
+ * few million pixels — so it is the one place where precision and instruction count are
+ * worth counting. Apple GPUs run mediump as fp16 at double the fp32 rate; desktop parts
+ * promote it and lose nothing. Everything here is in range for it: vQuad is bounded by the
+ * quad at +/-1, the exponent by -uSigma^2/2, and the colour was 8-bit to begin with.
+ *
+ * `1.0 - r2` is the same test the old `power > 0.0` was, before the exponential.
+ */
 const FRAG = `#version 300 es
-precision highp float;
-in vec4 vColor;
-in vec3 vConic;
-in vec2 vCenterPx;
-uniform vec2 uViewport;
+precision mediump float;
+flat in mediump vec4 vColor;
+in mediump vec2 vQuad;
+uniform mediump float uHalfSigma2;   // 0.5 * uSigma^2
 out vec4 outColor;
 void main() {
-  vec2 d = gl_FragCoord.xy - vec2(vCenterPx.x, uViewport.y - vCenterPx.y);
-  d.y = -d.y;
-  float power = -0.5 * (vConic.x * d.x * d.x + vConic.z * d.y * d.y) - vConic.y * d.x * d.y;
-  if (power > 0.0) discard;
-  float alpha = min(1.0, vColor.a * exp(power));
+  float r2 = dot(vQuad, vQuad);
+  if (r2 > 1.0) discard;
+  float alpha = min(1.0, vColor.a * exp(-uHalfSigma2 * r2));
   if (alpha < 0.004) discard;
   outColor = vec4(vColor.rgb * alpha, alpha);   // premultiplied
 }`;
@@ -422,7 +499,7 @@ export async function createSplatRenderer(
   const N = m.count;
   const u = Object.fromEntries(
     ['uCam', 'uView', 'uFocal', 'uCenter', 'uViewport', 'uDilate', 'uSigma', 'uGrid',
-     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog']
+     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog', 'uHalfSigma2']
       .map((n) => [n, gl.getUniformLocation(program, n)]),
   ) as Record<string, WebGLUniformLocation | null>;
 
@@ -432,7 +509,9 @@ export async function createSplatRenderer(
   gl.uniform2f(u.uDisp, m.dispLo, m.dispHi);
   gl.uniform1f(u.uOffsetRange, m.offsetRange);
   gl.uniform2f(u.uScaleLog, m.scaleLogLo, m.scaleLogHi);
-  gl.uniform1f(u.uSigma, opts.sigma ?? 2.0);
+  const sigma = opts.sigma ?? 2.0;
+  gl.uniform1f(u.uSigma, sigma);
+  gl.uniform1f(u.uHalfSigma2, 0.5 * sigma * sigma);
   gl.uniform1f(u.uDilate, opts.dilate ?? 0.3);
 
   // ---- instanced unit quad, one instance per splat -----------------------------------
@@ -514,6 +593,7 @@ export async function createSplatRenderer(
       : order.filter((i) => Math.floor(i / perLayer) === index);
     gl!.bindBuffer(gl!.ARRAY_BUFFER, orderBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, drawn, gl!.STATIC_DRAW);
+    dirty = true;
   }
 
   gl.disable(gl.DEPTH_TEST);
@@ -557,20 +637,72 @@ export async function createSplatRenderer(
   let last = 0;
   let running = false;
 
+  /**
+   * Draw when the picture would actually change, and never faster than 60Hz.
+   *
+   * The room is idle almost all the time — it is the top of a page people read — and its
+   * ambient wander has periods of 21 and 15 seconds at an amplitude of 0.022, which crosses
+   * the frame at about eleven device pixels a second. Redrawing 1.18M splats sixty times a
+   * second to move them a fifth of a pixel is what makes a laptop warm on a page nobody is
+   * touching.
+   *
+   * So the test is how far the camera has moved since the frame on screen, converted to
+   * pixels at the nearest content — the worst case, since parallax goes as 1/z. Below
+   * MOTION_EPS_PX there is nothing to see and the frame is skipped. This one rule covers
+   * every case that used to need its own: drift settles around 28Hz, a moving cursor or a
+   * push clears the threshold instantly and runs at the cap, and under
+   * prefers-reduced-motion the rig zeroes both drift and parallax so the eye never leaves
+   * home, the distance is exactly zero, and the renderer stops — which is what those
+   * visitors asked for and what they were not getting.
+   *
+   * `dirty` is for everything that changes the image without moving the camera: the first
+   * frame, a resize, a layer solo.
+   *
+   * The 60Hz cap is 3ms under the interval so vsync jitter cannot fall through it and halve
+   * the rate by accident.
+   */
+  const MIN_FRAME_MS = 1000 / 60 - 3;
+  const MOTION_EPS_PX = 0.4;
+  let lastDrawAt = 0;
+  const drawnEye: [number, number, number] = [0, 0, 0];
+  let dirty = true;
+
   function frame(now: number) {
     if (!running) return;
+    // Scheduled first, so a skipped frame still keeps the loop alive. `stop()` cancels it.
+    raf = requestAnimationFrame(frame);
+
+    // The rig integrates every tick even when the draw is skipped. It is a handful of
+    // trig on the CPU, and stepping it at the display's rate rather than the draw's keeps
+    // the drift's phase independent of how often we decide to paint it.
     const dt = last ? now - last : 16.7;
     last = now;
     opts.onBeforeFrame?.(dt);
 
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Scale the whole buffer down until it fits the budget. Applied to dpr rather than to
+    // the width and height separately so the aspect ratio — and therefore the `cover` crop
+    // the hotspot rectangles are placed against — is untouched.
+    const budget = opts.maxPixels ?? 3.2e6;
+    const want = canvas.clientWidth * canvas.clientHeight * dpr * dpr;
+    if (want > budget) dpr *= Math.sqrt(budget / want);
     const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w; canvas.height = h;
+      dirty = true;
+    }
 
     // `object-fit: cover`, in the reconstruction's own pixel units — the same crop
     // roomGeometry.cover() computes, so hotspot rects still land on their objects.
     const s = Math.max(w / m.width, h / m.height);
+
+    const movedPx = Math.hypot(camera.eye[0] - drawnEye[0], camera.eye[1] - drawnEye[1],
+                               camera.eye[2] - drawnEye[2]) * (m.fx * s) / m.nearZ;
+    if (!dirty && (movedPx < MOTION_EPS_PX || now - lastDrawAt < MIN_FRAME_MS)) return;
+    lastDrawAt = now;
+    dirty = false;
+    drawnEye[0] = camera.eye[0]; drawnEye[1] = camera.eye[1]; drawnEye[2] = camera.eye[2];
     gl!.uniform2f(u.uFocal, m.fx * s, m.fx * s);
     gl!.uniform2f(u.uCenter, m.cx * s + (w - m.width * s) / 2, m.cy * s + (h - m.height * s) / 2);
     gl!.uniform2f(u.uViewport, w, h);
@@ -606,7 +738,35 @@ export async function createSplatRenderer(
     gl!.viewport(0, 0, w, h);
     gl!.clear(gl!.COLOR_BUFFER_BIT);
     gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, drawn.length);
+  }
+
+  /**
+   * The rule in CLAUDE.md is "pause everything on `document.hidden`", and roomRenderer.ts
+   * has always honoured it. This build did not — Room.tsx's IntersectionObserver covers the
+   * room scrolling away, but not the tab going to the background. Browsers suspend rAF in a
+   * hidden tab anyway, so this costs nothing in practice; it exists so the comment at
+   * Room.tsx:154 is true of whichever renderer is mounted.
+   */
+  let wantRunning = false;
+  function onVisibility() {
+    if (document.hidden) { if (running) haltLoop(); }
+    else if (wantRunning && !running) startLoop();
+  }
+  document.addEventListener('visibilitychange', onVisibility);
+
+  function startLoop() {
+    if (running || document.hidden) return;
+    running = true;
+    last = 0;
+    lastDrawAt = 0;
+    // Whatever stopped the loop may have left the canvas cleared or stale.
+    dirty = true;
     raf = requestAnimationFrame(frame);
+  }
+  function haltLoop() {
+    running = false;
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
   }
 
   const renderer: RoomRenderer = {
@@ -624,18 +784,16 @@ export async function createSplatRenderer(
     setEdgeCut() {},
     setSoloLayer(index: number) { solo(index); },
     start() {
-      if (running) return;
-      running = true;
-      last = 0;
-      raf = requestAnimationFrame(frame);
+      wantRunning = true;
+      startLoop();
     },
     stop() {
-      running = false;
-      if (raf) cancelAnimationFrame(raf);
-      raf = 0;
+      wantRunning = false;
+      haltLoop();
     },
     destroy() {
       renderer.stop();
+      document.removeEventListener('visibilitychange', onVisibility);
       textures.forEach((t) => gl!.deleteTexture(t));
       gl!.deleteBuffer(cornerBuf);
       gl!.deleteBuffer(orderBuf);

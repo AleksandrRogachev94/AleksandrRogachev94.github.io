@@ -257,6 +257,74 @@ defect, so each fix revealed the next one.
   Gaussians carry real *coverage*. Under honest alpha compositing, pruning them speckles
   the render.
 
+  **Refuted a third time**, from a new direction, by someone optimising rather than
+  exporting — so here is the measurement that looks most convincing and is not: 90.79% of
+  layer B sits within 1% of layer A's depth *in the same grid cell*, which reads as a
+  redundant second copy of the visible surface and is 45.4% of the scene. It is not. Those
+  pairs are separated in the image plane by a median of 4.1 master px against a cell pitch
+  of 7.2 x 4.0, and **27.8% of them are more than a full cell pitch apart**. The two layers
+  scatter samples across the same surface at different positions; coverage is their union.
+  Depth agreement says nothing about coverage. Compensating the survivor with the pair's
+  combined opacity does not save it either — that fixes the tone and not the holes.
+
+## Where the frame time actually goes
+
+Measured on an M4 laptop at 3420x1628, using `/dev/splat`'s `ms gpu` (a
+`EXT_disjoint_timer_query_webgl2` reading; fps is useless here because it pins to the
+refresh rate). Three plausible culprits were each ruled out by a one-click A/B, and the
+order matters — every one of them would have been the obvious thing to optimise:
+
+| Suspect | Test | Result |
+|---|---|---|
+| Fragments / overdraw | `render scale` 1.00 -> 0.75 | little change |
+| Per-vertex covariance rebuild | `cov` -> CPU float32 precompute | **no** change |
+| Scattered texture reads | `sort` -> sequential (coherent fetches) | little change |
+
+What *did* move it, by a lot, was cutting the vertex stage's output: five interpolated
+highp floats (a conic and a centre, with the offset rebuilt from `gl_FragCoord`) down to
+two mediump ones, by building the quad on the covariance's eigenvectors so a corner at
+parameter (u, v) is at Mahalanobis distance^2 = sigma^2 (u^2 + v^2) and the fragment shader
+is one dot product.
+
+Once that landed the balance moved. Fitting `time = geometry + fill x pixels` across two
+render scales (15.0ms at 1.00, 10.0ms at 0.70) splits the frame into **9.8ms of fill and
+5.2ms of geometry**, so after the varying cut fill is the larger half and render scale
+matters again where it had not before. `maxPixels` is set from that: 3.2M is a 0.76x scale
+on a 1710x814 window, which is where Alex put the quality floor, and it predicts ~10.8ms.
+
+Two further structural changes were considered and both are refuted by these numbers rather
+than by taste:
+
+- **A transform-feedback pre-pass** (per-splat geometry computed once, 1.18M invocations
+  instead of 4.72M) saves ALU and texture fetches, and removing ALU and fetches was
+  measured at *exactly zero*. Same varyings, same 2.36M triangles.
+- **Point sprites** (one vertex per splat, `gl_PointCoord` for the interpolant) cut geometry
+  4x but force an axis-aligned square instead of an oriented ellipse, which this renderer
+  already measured at ~2.4x the fragments: 5.2/4 + 9.8x2.4 = 14.7ms against 10.8ms. Worse.
+
+What is left is not the frame but how often it is drawn, and the rule is one line: draw
+when the camera has moved at least 0.4 device px since the frame on screen, measured at the
+nearest content because parallax goes as 1/z, capped at 60Hz. Drift settles around 28Hz, a
+cursor or a push clears the threshold instantly, and under `prefers-reduced-motion` the rig
+zeroes both drift and parallax so the distance is exactly zero and the renderer stops
+entirely — redrawing a still room for the people who asked for less motion was the opposite
+of what they asked for.
+
+This replaced a first attempt that classified the camera's *speed* and picked between a 60Hz
+and a 24Hz cadence, with a separate exact-equality test for the frozen case. Three rules and
+three constants, where one threshold in the unit that actually matters — pixels the viewer
+can see — covers all of it.
+
+So this is **tiler-bound, not fill-bound or ALU-bound**: on a tile-based deferred GPU the
+cost scales with primitives x varying bytes, and 1.18M splats is 2.36M triangles a frame.
+The levers that work are the ones that shrink either factor — `flat` on the colour varying,
+`maxPixels`, and not redrawing a frame that has not changed by a pixel. The levers that do
+not work are the ones that make the shader smarter.
+
+`/dev/splat` deliberately does none of this: it draws full-scale at a flat 60Hz so it
+measures the whole cost, and it prints what the site would use underneath, because reading
+its number as the shipped one overstates the room by about half.
+
 ## Open
 
 ### 1. Payload — 8.89 MB
