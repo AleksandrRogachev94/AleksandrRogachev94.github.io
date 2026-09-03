@@ -1,0 +1,604 @@
+---
+// Development harness for the splat renderer. Not linked from anywhere and not part of the
+// site — it exists to answer "is the room drawing what the bake wrote?", one variable at a
+// time: which decoder, which covariance path, which layer, which draw order.
+//
+// **It lives here rather than beside the bake on purpose.** It used to sit in
+// `art/build/sharp-eval/`, which is gitignored and documented as disposable, and it was
+// opened through a separate static server. That meant a different origin from the site,
+// hence a different HTTP cache, and the two could disagree about which bake they were
+// looking at. Served by Astro it shares the site's origin, cache and window, so a
+// difference between this page and `/` is a difference in the *renderer* and nothing else.
+// That is what caught the YUV decode bug; see docs/SCENE-SPLAT.md.
+//
+// The shader is src/scripts/splatRenderer.ts's, verbatim, plus debug uniforms — mode 0
+// with no culling IS the shipped renderer. `is:inline` on both the style and the script
+// keeps it that way: nothing here is bundled, scoped or rewritten.
+---
+
+<!doctype html>
+<meta charset="utf-8">
+<title>splat debug — dev</title>
+<meta name="robots" content="noindex">
+<style is:inline>
+  html,body{margin:0;height:100%;background:#111;overflow:hidden;font:12px ui-monospace,Menlo,monospace;color:#ddd}
+  #wrap{position:fixed;inset:0}
+  canvas,#master{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #master{object-fit:cover;opacity:0;pointer-events:none}
+  #master.on{opacity:1}
+  #hud{position:fixed;left:12px;top:12px;background:#000c;padding:10px 12px;border-radius:6px;
+       line-height:1.55;backdrop-filter:blur(6px);width:330px;max-height:94vh;overflow:auto}
+  #hud b{color:#6ee}
+  h4{margin:12px 0 4px;color:#fa6;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+  label{display:block;margin-top:5px}
+  input[type=range]{width:150px;vertical-align:middle}
+  select{width:100%;background:#222;color:#ddd;border:1px solid #444;border-radius:3px;padding:2px}
+  kbd{background:#333;border-radius:3px;padding:1px 5px}
+  .v{float:right;color:#9cf}
+  .note{opacity:.6;margin-top:3px}
+</style>
+<div id="wrap">
+  <canvas id="gl"></canvas>
+  <img id="master" src="/art/room-day-summer.webp" alt="">
+</div>
+<div id="hud">
+  <div><b>splat debug</b></div>
+  <div id="stat">loading…</div>
+
+  <select id="set" hidden>
+    <option value="/art/room-day-summer">shipped</option>
+  </select>
+
+  <h4>1 · how the rasters are decoded</h4>
+  <select id="decode">
+    <option value="0">createImageBitmap (site) — clean</option>
+    <option value="1">WebCodecs ImageDecoder — YUV, low-passes the geometry</option>
+  </select>
+  <div class="note">If the specks die here, it is the premultiply round trip.</div>
+
+  <h4>2 · how the covariance is built</h4>
+  <select id="cov">
+    <option value="0">shader rebuild from 8-bit scale+quat (site)</option>
+    <option value="1">CPU float32 precompute (prototype path)</option>
+  </select>
+  <div class="note">If the specks die here, it is the shader's per-vertex rebuild.</div>
+
+  <h4>3 · what am I looking at</h4>
+  <select id="mode">
+    <option value="0">normal colour</option>
+    <option value="1">by layer — L0 red, L1 cyan</option>
+    <option value="2">by depth — near red, far blue</option>
+    <option value="3">by projected size — small blue, big red</option>
+    <option value="4">by opacity — low blue, high red</option>
+    <option value="5">flat white (shape only)</option>
+  </select>
+  <div class="note">Set this to "by layer" and look at a speck. That answers it.</div>
+  <select id="solo" style="margin-top:5px">
+    <option value="-1">draw both layers</option>
+    <option value="0">solo L0 (visible surface)</option>
+    <option value="1">solo L1 (hidden ribbon)</option>
+  </select>
+
+  <h4>4 · cull, to isolate the culprits</h4>
+  <label>hide projected size &lt;<span class="v" id="minszv">0.0</span>
+    <input id="minsz" type="range" min="0" max="20" step="0.25" value="0"></label>
+  <label>hide projected size &gt;<span class="v" id="maxszv">999</span>
+    <input id="maxsz" type="range" min="1" max="200" step="1" value="200"></label>
+  <label>hide opacity &lt;<span class="v" id="minav">0.00</span>
+    <input id="mina" type="range" min="0" max="1" step="0.01" value="0"></label>
+  <label>hide depth &lt;<span class="v" id="minzv">0.00</span> m
+    <input id="minz" type="range" min="0" max="12" step="0.05" value="0"></label>
+  <label>hide depth &gt;<span class="v" id="maxzv">999</span> m
+    <input id="maxz" type="range" min="1" max="120" step="1" value="120"></label>
+  <div class="note">Walk "hide size &gt;" down. If the specks are the last to go, they are the big splats.</div>
+
+  <h4>5 · renderer knobs</h4>
+  <label>dilate (px²)<span class="v" id="dilv">0.30</span>
+    <input id="dil" type="range" min="0" max="8" step="0.1" value="0.3"></label>
+  <label>quad extent (σ)<span class="v" id="sigv">2.0</span>
+    <input id="sig" type="range" min="1" max="4" step="0.1" value="2"></label>
+  <label>render scale<span class="v" id="rsv">1.00</span>
+    <input id="rs" type="range" min="0.35" max="1" step="0.05" value="1"></label>
+  <select id="sort" style="margin-top:5px">
+    <option value="0">sort once at load (site)</option>
+    <option value="1">re-sort on motion (prototype)</option>
+  </select>
+
+  <h4>6 · camera</h4>
+  <label>ambient ×<span class="v" id="ampv">0.0</span>
+    <input id="amp" type="range" min="0" max="6" step="0.1" value="0"></label>
+  <label>push (m)<span class="v" id="pushv">0.00</span>
+    <input id="push" type="range" min="-0.5" max="2.5" step="0.01" value="0"></label>
+  <div class="note"><kbd>M</kbd> hold = master A/B · mouse = parallax · wheel = push</div>
+</div>
+
+<script type="module" is:inline>
+// The site's own ambient tuning, so "ambient x1" is what the room actually does.
+const TUNING = { parallax: 0.02, drift: 0.022, driftXms: 21000, driftYms: 15000 };
+
+const canvas = document.getElementById('gl');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false });
+if (!gl) throw new Error('no webgl2');
+if (!gl.getExtension('EXT_color_buffer_float')) console.warn('no float colour buffer (readback only)');
+
+// ---------------------------------------------------------------------------------------
+// The vertex shader is src/scripts/splatRenderer.ts's, verbatim, plus:
+//   uCovMode  0 = rebuild from the rasters (the site), 1 = read the CPU float32 textures
+//   uMode     debug colouring
+//   cull uniforms
+// Nothing else is changed, so mode 0 + no culling IS the shipped renderer.
+// ---------------------------------------------------------------------------------------
+const VERT = `#version 300 es
+precision highp float;
+precision highp int;
+
+uniform highp sampler2D uGeom, uColor, uShape, uQuat;
+uniform highp sampler2D uCovA, uCovB;
+
+uniform vec3 uCam;
+uniform mat3 uView;
+uniform vec2 uFocal, uCenter, uViewport;
+uniform float uDilate, uSigma;
+uniform int   uGrid;
+uniform vec2  uPlate;
+uniform vec3  uIntrin;
+uniform vec2  uDisp;
+uniform float uOffsetRange;
+uniform vec2  uScaleLog;
+
+uniform int   uCovMode, uMode, uSolo;
+uniform vec2  uSizeCull;     // min, max projected sigma in device px
+uniform float uAlphaCull;
+uniform vec2  uDepthCull;
+uniform float uPerLayer;
+
+in vec2 aCorner;
+in uint aIndex;
+out vec4 vColor;
+out vec3 vConic;
+out vec2 vCenterPx;
+
+ivec2 texelOf(uint i) { return ivec2(int(i) % uGrid, int(i) / uGrid); }
+float uncompand(float b01) {
+  float t = (b01 * 255.0 - 127.5) / 127.5;
+  return sign(t) * t * t * uOffsetRange;
+}
+vec3 ramp(float t) {   // blue -> cyan -> yellow -> red
+  t = clamp(t, 0.0, 1.0);
+  return clamp(vec3(1.5 - abs(4.0 * t - 3.0), 1.5 - abs(4.0 * t - 2.0),
+                    1.5 - abs(4.0 * t - 1.0)), 0.0, 1.0);
+}
+void kill() { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); }
+
+void main() {
+  ivec2 tx = texelOf(aIndex);
+  vec4 geom = texelFetch(uGeom, tx, 0);
+
+  float d15 = (floor(geom.b * 255.0 + 0.5) * 128.0
+               + floor(geom.a * 255.0 + 0.5) - 128.0) / 32767.0;
+  float z = 1.0 / mix(uDisp.x, uDisp.y, d15);
+
+  int cell = int(aIndex) % (uGrid * uGrid);
+  vec2 cellPx = (vec2(float(cell % uGrid), float(cell / uGrid)) + 0.5) / float(uGrid) * uPlate;
+  vec2 px = cellPx + vec2(uncompand(geom.r), uncompand(geom.g));
+
+  vec3 world = vec3((px.x - uIntrin.y) / uIntrin.x * z,
+                    (px.y - uIntrin.z) / uIntrin.x * z, z);
+  vec3 p = uView * (world - uCam);
+  if (p.z < 0.05) { kill(); return; }
+
+  float layer = floor(float(aIndex) / uPerLayer);
+  if (uSolo >= 0 && int(layer) != uSolo) { kill(); return; }
+  if (z < uDepthCull.x || z > uDepthCull.y) { kill(); return; }
+
+  mat3 Vrk;
+  if (uCovMode == 0) {
+    vec3 s = exp(mix(vec3(uScaleLog.x), vec3(uScaleLog.y), texelFetch(uShape, tx, 0).rgb));
+    vec4 q = normalize(texelFetch(uQuat, tx, 0) * (255.0 / 127.0) - (128.0 / 127.0));
+    float w = q.x, x = q.y, y = q.z, zz = q.w;
+    mat3 R = mat3(
+      1.0 - 2.0 * (y * y + zz * zz), 2.0 * (x * y + w * zz),        2.0 * (x * zz - w * y),
+      2.0 * (x * y - w * zz),        1.0 - 2.0 * (x * x + zz * zz), 2.0 * (y * zz + w * x),
+      2.0 * (x * zz + w * y),        2.0 * (y * zz - w * x),        1.0 - 2.0 * (x * x + y * y));
+    mat3 M = uView * R;
+    Vrk = M * mat3(s.x * s.x, 0.0, 0.0, 0.0, s.y * s.y, 0.0, 0.0, 0.0, s.z * s.z) * transpose(M);
+  } else {
+    vec4 ca = texelFetch(uCovA, tx, 0), cb = texelFetch(uCovB, tx, 0);
+    mat3 W = mat3(ca.x, ca.y, ca.z, ca.y, ca.w, cb.x, ca.z, cb.x, cb.y);
+    Vrk = uView * W * transpose(uView);
+  }
+
+  float iz = 1.0 / p.z;
+  mat3 J = mat3(uFocal.x * iz, 0.0, 0.0,
+                0.0, uFocal.y * iz, 0.0,
+                -uFocal.x * p.x * iz * iz, -uFocal.y * p.y * iz * iz, 0.0);
+  mat3 C = J * Vrk * transpose(J);
+
+  float detOrig = C[0][0] * C[1][1] - C[0][1] * C[0][1];
+  float a = C[0][0] + uDilate, b = C[0][1], c = C[1][1] + uDilate;
+  float det = a * c - b * b;
+  if (det <= 0.0) { kill(); return; }
+  float compensation = sqrt(max(detOrig, 0.0) / det);
+  vConic = vec3(c, -b, a) / det;
+
+  float mid = 0.5 * (a + c), rad = sqrt(max(mid * mid - det, 0.0));
+  float l1 = mid + rad, l2 = max(mid - rad, 0.1);
+  float major = sqrt(l1);
+  if (uSigma * major > 1024.0) { kill(); return; }
+  if (major < uSizeCull.x || major > uSizeCull.y) { kill(); return; }
+
+  vec4 src = texelFetch(uColor, tx, 0);
+  if (src.a < uAlphaCull) { kill(); return; }
+
+  vec2 e1 = (abs(b) < 1e-9) ? (a >= c ? vec2(1.0, 0.0) : vec2(0.0, 1.0))
+                            : normalize(vec2(b, l1 - a));
+  vec2 centerPx = vec2(uFocal.x * p.x * iz + uCenter.x, uFocal.y * p.y * iz + uCenter.y);
+  vec2 corner = centerPx + aCorner.x * (e1 * (uSigma * major))
+                         + aCorner.y * (vec2(-e1.y, e1.x) * (uSigma * sqrt(l2)));
+
+  vCenterPx = centerPx;
+  vColor = src;
+  if (uMode == 1) vColor.rgb = layer < 0.5 ? vec3(1.0, 0.15, 0.1) : vec3(0.1, 0.9, 1.0);
+  else if (uMode == 2) vColor.rgb = ramp(1.0 - clamp((z - 1.0) / 8.0, 0.0, 1.0));
+  else if (uMode == 3) vColor.rgb = ramp(clamp(major / 14.0, 0.0, 1.0));
+  else if (uMode == 4) vColor.rgb = ramp(src.a);
+  else if (uMode == 5) vColor.rgb = vec3(1.0);
+  vColor.a *= compensation;
+
+  gl_Position = vec4(2.0 * corner.x / uViewport.x - 1.0,
+                     1.0 - 2.0 * corner.y / uViewport.y, 0.0, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+in vec4 vColor; in vec3 vConic; in vec2 vCenterPx;
+uniform vec2 uViewport;
+out vec4 outColor;
+void main() {
+  vec2 d = gl_FragCoord.xy - vec2(vCenterPx.x, uViewport.y - vCenterPx.y);
+  d.y = -d.y;
+  float power = -0.5 * (vConic.x * d.x * d.x + vConic.z * d.y * d.y) - vConic.y * d.x * d.y;
+  if (power > 0.0) discard;
+  float alpha = min(1.0, vColor.a * exp(power));
+  if (alpha < 0.004) discard;
+  outColor = vec4(vColor.rgb * alpha, alpha);
+}`;
+
+function sh(t, src) {
+  const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+
+const U = {};
+for (const n of ['uCam','uView','uFocal','uCenter','uViewport','uDilate','uSigma','uGrid',
+                 'uPlate','uIntrin','uDisp','uOffsetRange','uScaleLog','uCovMode','uMode',
+                 'uSolo','uSizeCull','uAlphaCull','uDepthCull','uPerLayer'])
+  U[n] = gl.getUniformLocation(prog, n);
+for (const [i, n] of ['uGeom','uColor','uShape','uQuat','uCovA','uCovB'].entries())
+  gl.uniform1i(gl.getUniformLocation(prog, n), i);
+
+const stat = document.getElementById('stat');
+const el = (id) => document.getElementById(id);
+const val = (id) => +el(id).value;
+
+// Two decode paths, because one of them is the bug.
+//
+// `createImageBitmap` is the site's. `premultiplyAlpha: 'none'` is honoured, but some
+// decoders reach it by storing the image premultiplied and dividing alpha back out — and
+// this raster's alpha is the disparity's low byte, so that round trip rewrites the high
+// byte of every splat whose low byte is small.
+//
+// WebCodecs hands back the decoded plane with no alpha step at all, which is what a
+// buffer of quantised geometry actually wants.
+async function raster(src) {
+  const res = await fetch(src);
+  if (!res.ok) throw new Error(`${src}: ${res.status}`);
+  const buf = await res.arrayBuffer();
+  if (+el('decode').value === 1 && 'ImageDecoder' in globalThis) {
+    const dec = new ImageDecoder({ data: buf, type: 'image/webp' });
+    const { image } = await dec.decode();
+    const width = image.displayWidth, height = image.displayHeight;
+    const size = image.allocationSize({ format: 'RGBA' });
+    const packed = new Uint8Array(size);
+    const layout = await image.copyTo(packed, { format: 'RGBA' });
+    image.close(); dec.close();
+    const stride = layout[0].stride;
+    let bytes = packed;
+    if (stride !== width * 4) {          // rows may be padded; repack tightly
+      bytes = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y++)
+        bytes.set(packed.subarray(y * stride, y * stride + width * 4), y * width * 4);
+    }
+    return { width, height, bytes, close() {} };
+  }
+  const bmp = await createImageBitmap(new Blob([buf]),
+    { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  return { width: bmp.width, height: bmp.height, bmp, close: () => bmp.close() };
+}
+function upload(unit, r) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  if (r.bytes) {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.width, r.height, 0,
+                  gl.RGBA, gl.UNSIGNED_BYTE, r.bytes);
+  } else {
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, r.bmp);
+  }
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return t;
+}
+function uploadFloat(unit, w, h, data) {
+  const t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return t;
+}
+// readPixels, not getImageData — the canvas premultiplies and this is geometry, not a picture.
+function readTex(tex, w, h) {
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  const out = new Uint8Array(w * h * 4);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE)
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, out);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.deleteFramebuffer(fbo);
+  return out;
+}
+
+const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+const cornerBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+const lc = gl.getAttribLocation(prog, 'aCorner');
+gl.enableVertexAttribArray(lc); gl.vertexAttribPointer(lc, 2, gl.FLOAT, false, 0, 0);
+const orderBuf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+const li = gl.getAttribLocation(prog, 'aIndex');
+gl.enableVertexAttribArray(li); gl.vertexAttribIPointer(li, 1, gl.UNSIGNED_INT, 0, 0);
+gl.vertexAttribDivisor(li, 1);
+
+gl.disable(gl.DEPTH_TEST);
+gl.enable(gl.BLEND);
+gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+gl.clearColor(0, 0, 0, 1);
+
+let M, N, depth, order, texs = [], warn = '';
+
+async function load(prefix) {
+  stat.textContent = 'loading ' + prefix + '…';
+  for (const t of texs) gl.deleteTexture(t);
+  texs = [];
+  // ?v= is the bake's content hash of the four rasters, and the manifest is revalidated
+  // every load. The site does the same. Without it the four stable filenames are cached
+  // forever, and this harness and the site fetch them through *different origins* — so
+  // they can disagree about what the current bake is, indefinitely, which is exactly the
+  // confusion that led here.
+  M = await (await fetch(`${prefix}-splat.json`, { cache: 'no-cache' })).json();
+  const v = M.version ? `?v=${M.version}` : '';
+  const [g, c, s, q] = await Promise.all(['geom','color','shape','quat']
+    .map((n) => raster(`${prefix}-splat-${n}.webp${v}`)));
+  texs = [upload(0, g), upload(1, c), upload(2, s), upload(3, q)];
+  N = M.count;
+
+  gl.uniform1i(U.uGrid, M.grid);
+  gl.uniform2f(U.uPlate, M.width, M.height);
+  gl.uniform3f(U.uIntrin, M.fx, M.cx, M.cy);
+  gl.uniform2f(U.uDisp, M.dispLo, M.dispHi);
+  gl.uniform1f(U.uOffsetRange, M.offsetRange);
+  gl.uniform2f(U.uScaleLog, M.scaleLogLo, M.scaleLogHi);
+  gl.uniform1f(U.uPerLayer, M.grid * M.grid);
+
+  // ---- integrity: the quaternion raster must survive the trip as unit quaternions ----
+  const qb = readTex(texs[3], q.width, Math.min(q.height, 128));
+  let offUnit = 0, rgbOverA = 0;
+  const n = q.width * Math.min(q.height, 128);
+  for (let i = 0; i < n; i++) {
+    const len = Math.hypot((qb[i*4]-128)/127, (qb[i*4+1]-128)/127,
+                           (qb[i*4+2]-128)/127, (qb[i*4+3]-128)/127);
+    if (len < 0.9 || len > 1.1) offUnit++;
+    if (qb[i*4] > qb[i*4+3] || qb[i*4+1] > qb[i*4+3]) rgbOverA++;
+  }
+  warn = '';
+  if (offUnit > n * 0.01) warn += `<br><b style="color:#f66">${(100*offUnit/n).toFixed(1)}% quats not unit length</b>`;
+  if (rgbOverA === 0) warn += '<br><b style="color:#f66">quat raster arrived premultiplied</b>';
+  if (!warn) warn = '<br><span style="opacity:.6">quat raster verified ok</span>';
+
+  // ---- the decisive one, and it needs no reference data ------------------------------
+  //
+  // In `geom`, B is the disparity's high byte and A its low byte. They are independent:
+  // in the written file P(B==255) is 0.0001% whether or not A is small. If the decoder
+  // round-tripped this through premultiplied alpha and divided back out, every texel with
+  // a small A has its RGB blown up and clamped, so B saturates to 255 — which decodes to
+  // z = 1.04m, the near plane, for the 6.2% of splats whose low byte happens to be < 16.
+  // Scattered over the whole frame, at their own colour, dragged to arm's length.
+  // The bake biases geom's alpha into [128, 255]; nothing that rewrites the raster keeps
+  // that. One exact test for the whole class of decode corruption.
+  const gt = readTex(texs[0], g.width, g.height);
+  let below = 0;
+  for (let i = 0; i < N; i++) if (gt[i * 4 + 3] < 128) below++;
+  warn += below === 0
+    ? '<br><span style="opacity:.6">geom alpha bias intact</span>'
+    : `<br><b style="color:#f66">geom lost its alpha bias on ${below.toLocaleString()} `
+      + 'texels — the raster was rewritten in transit</b>';
+
+  // The general detector, and the one that catches what the bias check cannot. A decoder
+  // that hands back YUV leaves alpha perfect and averages RGB with its neighbours, which
+  // is invisible above and fatal below. Adler-32 is position-weighted; a plain sum very
+  // nearly survives averaging, which is exactly the failure worth catching.
+  if (M.geomAdler32 !== undefined) {
+    let a = 1, b = 0;
+    for (let i = 0; i < N * 4;) {
+      const e = Math.min(i + 5552, N * 4);
+      for (; i < e; i++) { a += gt[i]; b += a; }
+      a %= 65521; b %= 65521;
+    }
+    const got = ((b << 16) | a) >>> 0;
+    warn += got === M.geomAdler32
+      ? '<br><span style="opacity:.6">geom bytes match the bake exactly</span>'
+      : `<br><b style="color:#f66">geom raster REWRITTEN in transit (adler32 ${got} vs `
+        + `${M.geomAdler32}) — positions, depths, sizes and rotations all low-passed</b>`;
+  }
+
+  // ---- CPU float32 covariances, the prototype's path ----
+  const gb = readTex(texs[0], g.width, g.height);
+  const sb = readTex(texs[2], s.width, s.height);
+  const covA = new Float32Array(N * 4), covB = new Float32Array(N * 4);
+  const sLo = M.scaleLogLo, sHi = M.scaleLogHi;
+  for (let i = 0; i < N; i++) {
+    const sx = Math.exp(sLo + (sb[i*4]  /255)*(sHi-sLo));
+    const sy = Math.exp(sLo + (sb[i*4+1]/255)*(sHi-sLo));
+    const sz = Math.exp(sLo + (sb[i*4+2]/255)*(sHi-sLo));
+    let w=(qb2(i,0)-128)/127, x=(qb2(i,1)-128)/127, y=(qb2(i,2)-128)/127, z=(qb2(i,3)-128)/127;
+    const nn = Math.hypot(w,x,y,z) || 1; w/=nn; x/=nn; y/=nn; z/=nn;
+    const R = [1-2*(y*y+z*z), 2*(x*y-w*z), 2*(x*z+w*y),
+               2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x),
+               2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)];
+    const a2=sx*sx, b2=sy*sy, c2=sz*sz;
+    covA[i*4]   = R[0]*R[0]*a2 + R[1]*R[1]*b2 + R[2]*R[2]*c2;
+    covA[i*4+1] = R[0]*R[3]*a2 + R[1]*R[4]*b2 + R[2]*R[5]*c2;
+    covA[i*4+2] = R[0]*R[6]*a2 + R[1]*R[7]*b2 + R[2]*R[8]*c2;
+    covA[i*4+3] = R[3]*R[3]*a2 + R[4]*R[4]*b2 + R[5]*R[5]*c2;
+    covB[i*4]   = R[3]*R[6]*a2 + R[4]*R[7]*b2 + R[5]*R[8]*c2;
+    covB[i*4+1] = R[6]*R[6]*a2 + R[7]*R[7]*b2 + R[8]*R[8]*c2;
+  }
+  texs.push(uploadFloat(4, q.width, q.height, covA));
+  texs.push(uploadFloat(5, q.width, q.height, covB));
+  function qb2(i, k) { return qFull[i * 4 + k]; }
+
+  // depth + the site's load-time counting sort
+  depth = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const d15 = (gb[i*4+2] * 128 + gb[i*4+3] - 128) / 32767;
+    depth[i] = 1 / (M.dispLo + d15 * (M.dispHi - M.dispLo));
+  }
+  order = new Uint32Array(N);
+  sortInto(order, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
+  [g, c, s, q].forEach((b) => b.close());
+  stat.innerHTML = `${N.toLocaleString()} splats` + warn;
+}
+
+// The quat bytes are needed for the whole raster, not just the verified band.
+let qFull;
+async function preloadQuat(prefix) {
+  // Runs before load(), so it fetches the manifest itself rather than requesting the quat
+  // raster unversioned and priming the cache under the wrong URL. load() re-reads it; it
+  // is 500 bytes and revalidated either way.
+  M = await (await fetch(`${prefix}-splat.json`, { cache: 'no-cache' })).json();
+  const q = await raster(`${prefix}-splat-quat.webp${M.version ? `?v=${M.version}` : ''}`);
+  const t = upload(3, q);
+  qFull = readTex(t, q.width, q.height);
+  gl.deleteTexture(t); q.close();
+}
+
+const counts = new Uint32Array(65536);
+let key = new Uint16Array(0);
+function sortInto(out, camZ) {
+  const B = 65536;
+  const zmin = M.nearZ, k = (B - 1) / Math.max(M.farZ - zmin, 1e-6);
+  if (key.length !== out.length) key = new Uint16Array(out.length);
+  const kk = key;
+  counts.fill(0);
+  for (let i = 0; i < out.length; i++) {
+    const q = ((B - 1) - ((depth[i] - camZ - zmin) * k)) | 0;
+    kk[i] = q < 0 ? 0 : q > B - 1 ? B - 1 : q;
+    counts[kk[i]]++;
+  }
+  let sum = 0;
+  for (let i = 0; i < B; i++) { const c = counts[i]; counts[i] = sum; sum += c; }
+  for (let i = 0; i < out.length; i++) out[counts[kk[i]]++] = i;
+}
+
+// ---- camera: the site's own idle rig — pure translation, uView is the identity ----
+const IDENT = new Float32Array([1,0,0, 0,1,0, 0,0,1]);
+let pointer = { x: 0, y: 0 }, lastSortZ = 1e9;
+addEventListener('pointermove', (e) => {
+  pointer.x = (e.clientX / innerWidth) * 2 - 1;
+  pointer.y = (e.clientY / innerHeight) * 2 - 1;
+});
+const masterEl = el('master');
+addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') masterEl.classList.add('on'); });
+addEventListener('keyup',   (e) => { if (e.key === 'm' || e.key === 'M') masterEl.classList.remove('on'); });
+addEventListener('wheel', (e) => {
+  el('push').value = (val('push') + e.deltaY * -0.0015).toFixed(2); e.preventDefault();
+}, { passive: false });
+
+for (const [id, fmt] of [['dil',2],['sig',1],['rs',2],['amp',1],['push',2],
+                         ['minsz',2],['maxsz',0],['mina',2],['minz',2],['maxz',0]])
+  el(id).addEventListener('input', () => { el(id + 'v').textContent = val(id).toFixed(fmt); });
+async function reload() {
+  const p = el('set').value;
+  el('stat').textContent = 'reloading…';
+  await preloadQuat(p); await load(p);
+}
+el('decode').addEventListener('change', reload);
+if (!('ImageDecoder' in globalThis))
+  el('decode').options[1].textContent += ' — UNAVAILABLE in this browser';
+
+let frames = 0, tLast = performance.now(), fps = 0;
+function frame(now) {
+  const rs = val('rs');
+  const w = (innerWidth * devicePixelRatio * rs) | 0;
+  const h = (innerHeight * devicePixelRatio * rs) | 0;
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+
+  const s = Math.max(w / M.width, h / M.height);
+  gl.uniform2f(U.uFocal, M.fx * s, M.fx * s);
+  gl.uniform2f(U.uCenter, M.cx * s + (w - M.width * s) / 2, M.cy * s + (h - M.height * s) / 2);
+  gl.uniform2f(U.uViewport, w, h);
+
+  const amp = val('amp');
+  const dX = Math.sin((now / TUNING.driftXms) * Math.PI * 2) * TUNING.drift;
+  const dY = Math.sin((now / TUNING.driftYms) * Math.PI * 2) * TUNING.drift * 0.6;
+  const ox = (pointer.x * TUNING.parallax + dX) * amp;
+  const oy = (pointer.y * TUNING.parallax * 0.6 + dY) * amp;
+  const oz = val('push');
+  gl.uniformMatrix3fv(U.uView, false, IDENT);
+  gl.uniform3f(U.uCam, ox, -oy, oz);
+
+  if (+el('sort').value === 1 && Math.abs(oz - lastSortZ) > 0.02) {
+    sortInto(order, oz); lastSortZ = oz;
+    gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, order);
+  }
+
+  gl.uniform1f(U.uDilate, val('dil'));
+  gl.uniform1f(U.uSigma, val('sig'));
+  gl.uniform1i(U.uCovMode, +el('cov').value);
+  gl.uniform1i(U.uMode, +el('mode').value);
+  gl.uniform1i(U.uSolo, +el('solo').value);
+  gl.uniform2f(U.uSizeCull, val('minsz'), val('maxsz') >= 200 ? 1e9 : val('maxsz'));
+  gl.uniform1f(U.uAlphaCull, val('mina'));
+  gl.uniform2f(U.uDepthCull, val('minz'), val('maxz') >= 120 ? 1e9 : val('maxz'));
+
+  gl.viewport(0, 0, w, h);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
+
+  frames++;
+  if (now - tLast > 500) {
+    fps = (frames * 1000) / (now - tLast); frames = 0; tLast = now;
+    stat.innerHTML = `${N.toLocaleString()} splats · ${fps.toFixed(0)} fps · ${w}x${h}<br>`
+      + `cam ${ox.toFixed(3)}, ${(-oy).toFixed(3)}, ${oz.toFixed(3)} m` + warn;
+  }
+  requestAnimationFrame(frame);
+}
+
+const P0 = el('set').value;
+await preloadQuat(P0);
+await load(P0);
+requestAnimationFrame(frame);
+</script>

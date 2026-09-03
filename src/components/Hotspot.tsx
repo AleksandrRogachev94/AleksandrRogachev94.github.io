@@ -51,6 +51,7 @@
 
 import { useRef, type CSSProperties } from 'react';
 import type { Hotspot } from '../data/hotspots';
+import { SCENE } from '../data/scene';
 import { imageRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
 
 interface Props {
@@ -71,9 +72,15 @@ interface Props {
 export default function HotspotButton({ hotspot, box, view, aspect, onActivate }: Props) {
   const lightRef = useRef<HTMLSpanElement>(null);
 
+  // The room parallaxes under this layer, so the rect has to follow it. `--par-x/y` are
+  // written on `.room` once per frame by the rig; the multiply by this object's own
+  // reciprocal depth happens here, in `left`/`top` rather than a transform — a transform
+  // would make this a stacking context and `.hotspot__light`'s `screen` blend would stop
+  // mixing with the canvas, which is the trap the comment above `.hotspot__wake` records.
+  const invZ = 1 / SCENE.farZ + (1 / SCENE.nearZ - 1 / SCENE.farZ) * hotspot.disparity;
   const style = {
-    left: `${box.left}px`,
-    top: `${box.top}px`,
+    left: `calc(${box.left}px + var(--par-x, 0) * ${invZ.toFixed(4)} * 1px)`,
+    top: `calc(${box.top}px + var(--par-y, 0) * ${invZ.toFixed(4)} * 1px)`,
     width: `${box.width}px`,
     height: `${box.height}px`,
     '--accent': hotspot.accent,

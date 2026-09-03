@@ -87,6 +87,55 @@ dependency change rather than a `--model` string. Worth taking when the master i
 regenerated; it does not fix a compositing artifact, which is a different row of the table
 below.
 
+#### A second source: `sharp_bake.py`
+
+Apple's SHARP (`apple/ml-sharp`, arXiv 2512.10685) regresses a 3D Gaussian scene from one
+image. `sharp_bake.py` renders that splat back down to **stage 0's exact format** — 16-bit
+PNG, disparity, near high, master dimensions — so `depth_prep.py` and everything after it
+is unchanged and either source still works. What it buys over Depth Anything:
+
+* **Silhouettes are crisp rather than soft.** This is the whole reason to bother: depth is
+  what the mesh is built from, and Depth Anything's edges are smooth ramps where the
+  object boundary is a step.
+* **It is metric**, so camera excursions can be reasoned about in metres. Ambient parallax
+  plus drift works out to ~5 cm of real camera motion.
+
+Two things it needs handling for, both settled in the tool:
+
+* **Render depth from every Gaussian, not just layer 0.** SHARP's Gaussians do not quite
+  tile their own 768×768 sampling grid — horizontally they cover half the gap to their
+  neighbour, because the 16:9 master is squashed to square before inference. Layer 0 alone
+  leaves speckle; layer 1 sits behind it, so a z-buffer min still picks the front surface
+  and the gaps close. Measured: 0 uncovered pixels at 5504×3072. Whatever survives is
+  grown inward from the nearest surface, never written as the far plane — a one-pixel far
+  spike inside a near surface is a spike of real geometry.
+* **`--far-clip`, default 0 — off.** SHARP genuinely resolves the yard through the glass,
+  out to ~100 m, and that is worth keeping. Clipping to 8 m was tried on the theory that a
+  100 m yard crushes the room's disparity range; the measurement refutes it. Disparity is
+  1/z, so distance is naturally compressive: unclipped, the room inside 8 m still holds
+  **220 of the 255** 8-bit levels and the whole yard costs 35. Keeping true depth is also
+  what stops the yard *sliding with the wall plane* as the camera moves — flatten the
+  window and everything painted beyond it parallaxes as though it were at the window's
+  distance, which reads as stretching. This supersedes the "monocular models read glass as
+  one flat surface" note under *Settled*: that is true of Depth Anything and not of SHARP.
+
+  It does have a consequence for `ROOM_TUNING`. The renderer maps normalised disparity
+  linearly to 1/z between `nearZ` and `farZ`, currently 1 and 6 — a depth ratio of 6,
+  against a true scene ratio of ~103. Because SHARP is metric, setting `nearZ`/`farZ` to
+  the metres the bake reports makes the parallax physically exact, and is what actually
+  buys the still yard.
+
+Errors stay **hand-fixable**, which is the quiet argument for baking rather than shipping
+Gaussians: the bird-feeder post comes back split across two depth levels, and that is a
+paint fix in `depth_fix.py` on a PNG. The same error inside 1.16M Gaussians is not
+editable at all.
+
+`sharp_bake.py` also writes a background plate — the scene re-rendered with the frontmost
+surface peeled off. Be precise about what that is: SHARP's second layer is a thin shell
+behind the first, not the room with its objects removed. It is a **disocclusion sliver
+fill**, correct in the few-pixel bands a small camera excursion actually opens, and it is
+not a replacement for LaMa on a whole-object hole. Offered to stage 5 through `--fill-dir`.
+
 ---
 
 ## Four problems that look like one

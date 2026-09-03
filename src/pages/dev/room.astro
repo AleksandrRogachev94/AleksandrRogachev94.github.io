@@ -52,17 +52,17 @@ import '../../styles/tokens.css';
       import { createRoomRenderer } from '../../scripts/roomRenderer';
       import { createCameraRig, PLATE, ROOM_TUNING } from '../../scripts/cameraRig';
       import { screenToImage } from '../../scripts/roomGeometry';
+      import { SCENE } from '../../data/scene';
+      import { createSplatRenderer } from '../../scripts/splatRenderer';
 
-      // Back to front. The shell first, then furniture, then what stands on furniture.
-      const S = '/art/room-day-summer';
-      const LAYERS = [0, 1, 2].map((i) => ({
-        colorSrc: `${S}-layer${i}.webp`,
-        depthSrc: `${S}-layer${i}-depth.webp`,
-      }));
-      // Picking needs one depth map covering the whole frame; the per-layer ones are cut.
-      // This is a harness affordance only. The site aims at authored points instead, so it
-      // never downloads this plate or stalls the main thread reading it back.
-      const DEPTH = `${S}-depth.webp`;
+      // Back to front, from whichever build src/data/scene.ts has selected. Empty under a
+      // splat build, which has no plates at all.
+      const LAYERS = SCENE.layers ?? [];
+      // Picking needs one depth map covering the whole frame; under the layered build the
+      // per-layer ones are cut, so it is a plate of its own. This is a harness affordance
+      // only — the site aims at authored points instead, so it never downloads this plate
+      // or stalls the main thread reading it back.
+      const DEPTH = SCENE.pickingDepth;   // may be absent; click-to-push is skipped then
 
       const canvas = document.getElementById('room') as HTMLCanvasElement;
       const status = document.getElementById('status')!;
@@ -97,11 +97,27 @@ import '../../styles/tokens.css';
       let rig: ReturnType<typeof createCameraRig> | null = null;
       let pushing = false;
 
-      const renderer = await createRoomRenderer({
-        canvas,
-        layers: LAYERS,
-        gridCols,
-        onBeforeFrame: (dt) => {
+      // The harness tunes whichever build is selected, so it picks the same way Room.tsx
+      // does. The mesh-only sliders below stay wired: on a splat build the renderer's
+      // setDepthRange/setFov/setEdgeCut/setSoloLayer are no-ops, because that build's
+      // geometry is measured from the PLY rather than tuned.
+      const renderer = (await (SCENE.kind === 'splat'
+        ? createSplatRenderer({
+          canvas,
+          assetPrefix: SCENE.assetPrefix!,
+          onBeforeFrame: (dt) => onFrame(dt),
+        })
+        : createRoomRenderer({
+          canvas,
+          layers: LAYERS,
+          gridCols,
+          fovDeg: SCENE.fovDeg,
+          nearZ: SCENE.nearZ,
+          farZ: SCENE.farZ,
+          onBeforeFrame: (dt) => onFrame(dt),
+        })))!;
+
+      function onFrame(dt: number) {
           rig?.update(dt);
           if (!rig) return;
           const reveal = rig.excursionPx();
@@ -109,13 +125,15 @@ import '../../styles/tokens.css';
           status.textContent = `${pushing ? 'push' : 'home'} · excursion `
             + `${reveal.toFixed(0)}px / ${PLATE.marginPx}px${over ? ' OVER BUDGET' : ''}`;
           status.style.color = over ? '#ff6b6b' : '';
-        },
-      });
+      }
 
       if (!renderer) {
         status.textContent = 'no webgl2 — the site would show the static image here';
       } else {
-        const sampleDepth = await depthSampler(DEPTH);
+        // No depth plate under the splat build. Click-to-push still works; it just aims
+        // at a fixed mid-room disparity instead of the one under the cursor, which is a
+        // harness convenience rather than anything the site relies on.
+        const sampleDepth = DEPTH ? await depthSampler(DEPTH) : () => 0.35;
         const tuning = { ...ROOM_TUNING };
         rig = createCameraRig(renderer, renderer.imageAspect, tuning);
 
@@ -154,24 +172,59 @@ import '../../styles/tokens.css';
           rig!.setDolly(dolly);
         }, { passive: false });
 
-        function bind(id: string, apply: (v: number) => void, fmt = (v: number) => v.toFixed(2)) {
+        /**
+         * Bind a slider, starting it at the value the site actually ships.
+         *
+         * `start` is not optional decoration. The sliders used to carry their defaults in
+         * the HTML `value=` attribute and `run()` fires once on load, so the harness
+         * *overwrote* the shipping tuning with whatever was typed into the markup. That
+         * was invisible while the two agreed and became the whole bug the moment the
+         * scene started supplying its own geometry: the panel read 1 / 6 / 42 and edge cut
+         * 1.00 — no tearing at all — over a scene built for 1.16 / 98.2 / 38.7.
+         * The claim in cameraRig.ts that the harness starts from ROOM_TUNING is now true.
+         */
+        function bind(
+          id: string,
+          start: number,
+          apply: (v: number) => void,
+          fmt = (v: number) => v.toFixed(2),
+          range?: [number, number],
+        ) {
           const el = $(id), o = out(id + 'Out');
+          if (range) { el.min = String(range[0]); el.max = String(range[1]); }
+          el.value = String(start);
           const run = () => { const v = parseFloat(el.value); o.value = fmt(v); apply(v); };
           el.addEventListener('input', run); run();
         }
+        // The front layer's tear, which under the SHARP build is the entire occlusion
+        // model. Layer 0 is the backstop and is never touched: a hole in it is a hole in
+        // the room.
+        const cutLayers = LAYERS
+          .map((l, i) => (l.edgeCut === undefined ? -1 : i))
+          .filter((i) => i >= 0);
+        const startCut = cutLayers.length
+          ? Math.max(...cutLayers.map((i) => LAYERS[i].edgeCut!)) : 1;
         // Depth range and fov are duplicated state: the rig needs them to place an aim
         // point, the renderer needs them to draw. Both get written, from one slider.
-        bind('nearZ', (v) => { tuning.nearZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); });
-        bind('farZ', (v) => { tuning.farZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); }, (v) => v.toFixed(1));
-        bind('fov', (v) => { tuning.fovDeg = v; renderer.setFov(v); }, (v) => v.toFixed(0));
-        bind('travel', (v) => { tuning.travel = v; });
-        bind('edgeCut', (v) => { renderer.setEdgeCut(v); });
-        bind('parallax', (v) => { tuning.parallax = v; }, (v) => v.toFixed(3));
-        bind('drift', (v) => { tuning.drift = v; }, (v) => v.toFixed(3));
-        bind('lateral', (v) => { tuning.lateral = v; });
+        bind('nearZ', tuning.nearZ,
+          (v) => { tuning.nearZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); },
+          (v) => v.toFixed(2), [0.4, Math.max(3, SCENE.nearZ * 2)]);
+        bind('farZ', tuning.farZ,
+          (v) => { tuning.farZ = v; renderer.setDepthRange(tuning.nearZ, tuning.farZ); },
+          (v) => v.toFixed(1), [2, Math.max(20, SCENE.farZ * 1.5)]);
+        bind('fov', tuning.fovDeg, (v) => { tuning.fovDeg = v; renderer.setFov(v); },
+          (v) => v.toFixed(0));
+        bind('travel', tuning.travel, (v) => { tuning.travel = v; });
+        bind('edgeCut', startCut,
+          (v) => { for (const i of cutLayers) renderer.setEdgeCut(v, i); },
+          (v) => v.toFixed(3), [0.005, 1]);
+        bind('parallax', tuning.parallax, (v) => { tuning.parallax = v; }, (v) => v.toFixed(3));
+        bind('drift', tuning.drift, (v) => { tuning.drift = v; }, (v) => v.toFixed(3));
+        bind('lateral', tuning.lateral, (v) => { tuning.lateral = v; });
         // Isolating a layer is how you tell a bad mask from a bad fill: a hole in the
         // shell is a mask that missed, a smear inside one layer is a layer that is missing.
-        bind('solo', (v) => { renderer.setSoloLayer(v); }, (v) => (v < 0 ? 'all' : `L${v}`));
+        bind('solo', -1, (v) => { renderer.setSoloLayer(v); },
+          (v) => (v < 0 ? 'all' : `L${v}`), [-1, Math.max(0, renderer.layerCount - 1)]);
 
         status.textContent = 'home';
         renderer.start();

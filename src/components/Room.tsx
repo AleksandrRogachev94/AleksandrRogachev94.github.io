@@ -14,22 +14,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoomRenderer, type RoomRenderer } from '../scripts/roomRenderer';
+import { createSplatRenderer } from '../scripts/splatRenderer';
 import { createCameraRig, type CameraRig } from '../scripts/cameraRig';
-import { imageRectToScreen, pushedRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
+import { parallaxCoeff, imageRectToScreen, pushedRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
 import { TRANSITION, TRANSITION_VARS } from '../scripts/transition';
 import { HOTSPOTS, hotspotById, type Hotspot } from '../data/hotspots';
+import { SCENE } from '../data/scene';
 import type { Project } from '../data/projects';
 import HotspotButton from './Hotspot';
 import MonitorFocus from './MonitorFocus';
 
-const ART = '/art/room-day-summer';
-const LAYERS = [0, 1, 2].map((i) => ({
-  colorSrc: `${ART}-layer${i}.webp`,
-  depthSrc: `${ART}-layer${i}-depth.webp`,
-}));
+/** Which build's plates to load, and the numbers they were measured with. */
+const LAYERS = SCENE.layers ?? [];
 /** The whole-frame plate, for browsers with no WebGL2. Degrade explicitly, never silently. */
-const STILL = `${ART}.webp`;
-const ART_ASPECT = 5504 / 3072;
+const STILL = SCENE.still;
+const ART_ASPECT = SCENE.width / SCENE.height;
 
 /**
  * When the panel covers the viewport, and when it is gone again. Derived rather than
@@ -83,18 +82,40 @@ export default function Room() {
     let renderer: RoomRenderer | null = null;
     let rig: CameraRig | null = null;
 
-    createRoomRenderer({
-      canvas,
-      layers: LAYERS,
-      // One rAF for the whole room. The rig writes the camera, and the push progress goes
-      // out as a custom property rather than React state — this runs 60 times a second and
-      // only ever changes how two things look.
-      onBeforeFrame: (dt) => {
-        if (!rig) return;
-        rig.update(dt);
-        root.style.setProperty('--push', rig.progress().toFixed(3));
-      },
-    })
+    // One rAF for the whole room. The rig writes the camera, and the push progress goes
+    // out as a custom property rather than React state — this runs 60 times a second and
+    // only ever changes how two things look.
+    const onBeforeFrame = (dt: number) => {
+      if (!rig || !renderer) return;
+      rig.update(dt);
+      root.style.setProperty('--push', rig.progress().toFixed(3));
+      // Keep the hotspots glued to their objects while the room parallaxes under them.
+      // Two numbers for the whole layer; each hotspot scales them by its own 1/z in CSS.
+      const k = parallaxCoeff(
+        renderer.camera.eye[0] - renderer.home.eye[0],
+        renderer.camera.eye[1] - renderer.home.eye[1],
+        canvas.clientWidth, canvas.clientHeight,
+        { fovDeg: SCENE.fovDeg, imageAspect: renderer.imageAspect },
+      );
+      root.style.setProperty('--par-x', k.kx.toFixed(2));
+      root.style.setProperty('--par-y', k.ky.toFixed(2));
+    };
+
+    // Both renderers satisfy the same interface, so nothing below this line — the rig, the
+    // stage manager, the hotspots — knows which build is mounted. See src/data/scene.ts.
+    const created = SCENE.kind === 'splat'
+      ? createSplatRenderer({ canvas, assetPrefix: SCENE.assetPrefix!, onBeforeFrame })
+      : createRoomRenderer({
+        canvas,
+        layers: LAYERS,
+        // The reconstruction has to be the same shape as the room the rig aims into.
+        fovDeg: SCENE.fovDeg,
+        nearZ: SCENE.nearZ,
+        farZ: SCENE.farZ,
+        onBeforeFrame,
+      });
+
+    created
       .then((r) => {
         if (disposed) { r?.destroy(); return; }
         if (!r) { setWebgl(false); return; }

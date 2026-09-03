@@ -16,6 +16,7 @@
 import type { RoomRenderer } from './roomRenderer';
 import { imagePointToWorld, type Vec3 } from './roomGeometry';
 import { TRANSITION } from './transition';
+import { SCENE } from '../data/scene';
 
 export interface RoomTuning {
   /** World-space distance of the nearest content (disparity 1.0). */
@@ -43,24 +44,62 @@ export interface RoomTuning {
  * Tuned in `/dev/room` against the 5504px master. These are the shipping values; the
  * harness starts its sliders from them, so "tuned in the harness" and "what the site does"
  * are the same numbers by construction.
+ *
+ * `nearZ`, `farZ` and `fovDeg` are no longer among them. They belong to the *scene*, not
+ * to the feel: the SHARP build's are metric and come out of the PLY's own intrinsics, so
+ * they are a measurement and moving them makes the room a different shape rather than a
+ * different mood. See src/data/scene.ts.
+ *
+ * The amplitudes below are world units, which under the SHARP build are metres. Ambient
+ * motion peaks at parallax + drift = 0.115m against the 0.119m budget the scene reports
+ * (`maxLateralM`, ported from ml-sharp) — the distance at which the model says its second
+ * layer runs out of hidden geometry to reveal.
+ *
+ * 0.115 rather than the 0.042 this shipped with first, because that timidity was bought
+ * with the wrong currency. The room was measured for disocclusion at increasing lateral
+ * offsets — fraction of pixels the splat field fails to cover — and it holds right up to
+ * the budget: 0.000% at 0.042, 0.000% at 0.090, 0.015% at 0.119, and only at 0.150 does
+ * the fig corner start opening, at 0.357%. There was nothing to be afraid of; the
+ * whole-frame speckle that made the room look fragile was a decoder eating the disparity
+ * raster, not the reconstruction running out of answers.
+ *
+ * The second ceiling was the hotspots, which were pinned to the screen while the art moved
+ * under them — 15px of slip at the old amplitude, 41px at this one. They now track their
+ * own objects (`parallaxCoeff`), so the only limit left is the one measured above.
+ *
+ * `drift` sits below `parallax` again, which is what the paragraph above it always claimed
+ * and the old numbers quietly contradicted.
  */
 export const ROOM_TUNING: RoomTuning = {
-  nearZ: 1,
-  farZ: 6,
-  fovDeg: 42,
+  nearZ: SCENE.nearZ,
+  farZ: SCENE.farZ,
+  fovDeg: SCENE.fovDeg,
   travel: 0.55,
-  parallax: 0.02,
-  drift: 0.022,
+  parallax: 0.065,
+  drift: 0.05,
   lateral: 1,
 };
 
 /**
  * Properties of the plates on disk, needed to report the excursion budget in the units it
- * was painted in. `marginPx` mirrors `tools/inpaint.py --margin`, which scales with the
- * plate: 64px at its 1024px reference, so 344px here. Move the camera further sideways
- * than this and it reaches past the painted band to a hard alpha edge.
+ * was painted in. Under the layered build `marginPx` mirrors `tools/inpaint.py --margin`,
+ * which scales with the plate: 64px at its 1024px reference, so 344px on this master.
+ * Move the camera further sideways than that and it reaches past the painted band to a
+ * hard alpha edge.
+ *
+ * The SHARP build has no painted band — its back layer is a whole frame — so the limit is
+ * not a margin at all but the point where the two layers run out of hidden geometry to
+ * show. `SCENE.excursion` carries whichever of the two applies, in world units.
  */
-export const PLATE = { width: 5504, height: 3072, marginPx: 344 };
+export const PLATE = {
+  width: SCENE.width,
+  height: SCENE.height,
+  marginPx: Math.round(
+    (SCENE.excursion * (1 / SCENE.nearZ - 1 / SCENE.farZ))
+      / (Math.tan((SCENE.fovDeg * Math.PI) / 180 / 2) * (SCENE.width / SCENE.height))
+      * (SCENE.width / 2),
+  ),
+};
 
 export interface PushTarget {
   point: Vec3;

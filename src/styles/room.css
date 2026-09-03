@@ -69,10 +69,18 @@
    * was only ever masking the last frame or two. The first half of the journey is still
    * completely unfiltered, because the parallax is the entire argument for this room being
    * a displaced mesh rather than a photograph and covering it would waste the one thing
-   * worth showing. At rest the whole list evaluates to identity and costs nothing.
+   * worth showing.
    *
    * It reads --push, so it lifts by itself on the way out as the camera retreats. That is
    * most of what makes the exit read as a reverse rather than as a dismissal.
+   *
+   * **It is gated on `.room--busy`, and that gate is load-bearing.** The list evaluates to
+   * identity at `--push: 0`, so it used to be left on unconditionally as a no-op. It is not
+   * a no-op: any `filter` other than `none` puts the canvas on its own composited layer and
+   * makes the browser resample it through that layer every frame, which costs a visible
+   * touch of sharpness at rest — the whole room, slightly soft, for a veil that is not
+   * running. `.room--busy` is exactly the window in which `--push` can be non-zero, so
+   * gating loses nothing and buys back both the sharpness and the compositor layer.
    *
    * The blur peaks at 9px, not the 26px it briefly did. A heavier veil hides more
    * reconstruction, but it also widens the gap the panel has to cross: a hard-focus
@@ -88,6 +96,9 @@
    * it is tuned. It now goes to ~12%, close enough to the panel's own darkness that the swap
    * stops being the thing you see at all — there is no glow left to do the smaller job of
    * hiding it (see the note near `.boot__panel` below). Same start point, push 0.45. */
+}
+
+.room--busy .room__canvas {
   filter:
     blur(max(0px, calc(var(--push) * 17px - 8px)))
     brightness(calc(1 - max(0, var(--push) * 1.6 - 0.72)));

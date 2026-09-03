@@ -15,8 +15,26 @@ structural changes — it records _why_ several obvious-looking ideas were rejec
 re-proposing them wastes everyone's time. Art generation prompts are in
 [docs/PROMPTS.md](docs/PROMPTS.md). To build a scene, follow [docs/SCENE.md](docs/SCENE.md);
 [docs/PIPELINE.md](docs/PIPELINE.md) is why that runbook is shaped the way it is.
-[docs/FILL.md](docs/FILL.md) is where the current quality work is: the visible artifact was
-the composite seam, not the inpainter, and it records what that cost to find.
+[docs/FILL.md](docs/FILL.md) is where the layered build's quality work is: the visible
+artifact was the composite seam, not the inpainter, and it records what that cost to find.
+
+There are now **three scene builds**. The *authored* one is everything above. The one
+that **ships** draws an Apple SHARP Gaussian reconstruction directly — no plates, no
+masks, no inpainting, four files and two commands. Its runbook is
+[docs/SCENE-SPLAT.md](docs/SCENE-SPLAT.md). The third
+([docs/SCENE-SHARP.md](docs/SCENE-SHARP.md)) flattened the same reconstruction into plates
+and a torn mesh; it is superseded and its doc says why.
+
+**The finding that settled it:** a triangle mesh at a depth discontinuity must either
+bridge it (and smear) or tear it (and need a complete background behind it). SHARP's
+second layer is not that background — it measures 25.1dB against the master, with only
+2.23% of the frame genuinely behind the front surface. It is the visible surface plus a
+thin ribbon of hidden geometry at silhouettes, which is exactly enough for a renderer with
+no connectivity and nowhere near enough for a mesh. Gaussians never face the choice.
+
+`src/data/scene.ts` selects which build ships and is the only thing in the app that knows;
+`kind` picks the renderer. Most of the "Do not reopen" list below is about tuning an
+inpainter that neither SHARP build runs.
 
 Implement functionality step-by-step and educational, explaining what and why at each step. Do not try to implement everything in one go. The user is new to astro framework and wants to learn.
 

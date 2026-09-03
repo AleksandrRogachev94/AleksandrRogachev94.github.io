@@ -28,6 +28,13 @@
  * N-1". The 3D printer reads *farther* than the cabinet it stands on, so grouping by
  * depth value would put them in one layer and smear across the join. See docs/PIPELINE.md.
  *
+ * That describes the *layered* build, where the cut is authored offline and this file just
+ * draws what it is given. Under the SHARP build there are two layers instead of three and
+ * the cut happens here, per quad, from the depth jump (`edgeCut` below) — the plates come
+ * from a Gaussian reconstruction that renders what stands behind the frontmost surface,
+ * so no mask or fill is involved. Both are supported; src/data/scene.ts selects one, and
+ * everything below is common to them. See docs/SCENE-SHARP.md.
+ *
  * The renderer takes the layers as given and must not exceed the excursion budget they
  * were painted for (`--margin` in tools/inpaint.py, which scales with the plate: 64px at
  * its 1024px reference, so 344px on the 5504px master). Move further than
@@ -43,18 +50,36 @@ import { lookAt, mat4, multiply, perspective, type Mat4, type Vec3 } from './mat
 export interface RoomLayerSource {
   colorSrc: string;
   depthSrc: string;
+  /**
+   * Disparity jump across one mesh quad above which this layer's geometry is discarded
+   * rather than stretched. 1 (the default) draws everything.
+   *
+   * Per layer, because the two builds want opposite answers from it. The layered build
+   * cuts offline, so every layer is already free of internal silhouettes and this stays
+   * off. The SHARP build makes it the entire occlusion model: its front layer tears at
+   * every depth step and its back layer never tears, because a hole in the backstop is a
+   * hole in the room. See src/data/scene.ts.
+   */
+  edgeCut?: number;
 }
 
 export interface RoomRendererOptions {
   canvas: HTMLCanvasElement;
   /** Back to front. Index 0 is the shell — opaque, uncut, and never absent. */
   layers: RoomLayerSource[];
-  /** Vertical field of view, degrees. Also the lens the art is assumed to have been shot with. */
-  fovDeg?: number;
-  /** World-space distance of the *nearest* content (disparity 1.0). */
-  nearZ?: number;
-  /** World-space distance of the *farthest* content (disparity 0.0). */
-  farZ?: number;
+  /**
+   * Vertical field of view in degrees, the nearest content's distance (disparity 1.0) and
+   * the farthest content's (disparity 0.0).
+   *
+   * Required, and deliberately so. These used to default to 1 / 6 / 42, which silently
+   * agreed with `ROOM_TUNING` until `ROOM_TUNING` started coming from the scene — after
+   * which the rig placed aim points in a 98m room while the renderer reconstructed a 6m
+   * one, and every silhouette stretched. The same three numbers living in two places with
+   * no link between them is the bug; a required argument is the fix. Pass `SCENE`'s.
+   */
+  fovDeg: number;
+  nearZ: number;
+  farZ: number;
   /**
    * Mesh columns; rows follow from the image aspect. This is the resolution the room's
    * *geometry* is sampled at, and it is the first thing to raise if a push looks melted:
@@ -98,11 +123,15 @@ export interface RoomRenderer {
   setFov(fovDeg: number): void;
   /**
    * Threshold on the per-quad depth jump above which geometry is discarded instead of
-   * drawn. 1.0 draws everything. Cutting layers offline is what removes the smears this
-   * used to fight, so it now defaults to off and stays only as a diagnostic — if it has
-   * to be turned down to make a scene look right, a layer is missing from objects.json.
+   * drawn. 1.0 draws everything. With no `layer`, sets every layer.
+   *
+   * What this is for depends on the build. Under the layered build the cut happened
+   * offline, so every layer arrives free of internal silhouettes and this is only a
+   * diagnostic: if it has to be turned down to make the scene look right, a layer is
+   * missing from objects.json. Under the SHARP build it is the occlusion model itself —
+   * the front layer tears here and the back layer shows through. See src/data/scene.ts.
    */
-  setEdgeCut(threshold: number): void;
+  setEdgeCut(threshold: number, layer?: number): void;
   /** Draw only layer `i`, or all of them again with -1. Diagnostic. */
   setSoloLayer(index: number): void;
   readonly layerCount: number;
@@ -121,7 +150,8 @@ export interface RoomRenderer {
 const VERT = `#version 300 es
 precision highp float;
 
-in vec2 aUv;                 // 0..1 across the image; the only attribute we need
+in vec2 aUv;                 // 0..1 across the image
+in float aDepth;             // <0 = read the depth map; >=0 = use this disparity instead
 
 uniform sampler2D uDepth;
 uniform float uTanHalfFov;   // tan(fovY / 2) of the *reference* camera
@@ -129,14 +159,19 @@ uniform float uImageAspect;  // aspect of the art, which fixes the reconstructio
 uniform float uInvNear;      // 1 / nearZ
 uniform float uInvFar;       // 1 / farZ
 uniform mat4 uViewProj;
-uniform vec2 uGridStep;      // one mesh quad, in uv units
 
 out vec2 vUv;
-out float vStretch;          // local depth discontinuity, 0 = flat surface
 
 void main() {
   // The depth map is disparity: near = 1.0, far = 0.0 (see art/README.md).
-  float disparity = texture(uDepth, aUv).r;
+  //
+  // A vertex on a quad that bridges a silhouette overrides it, and sits at the near side's
+  // depth instead. This costs nothing at rest: at the home camera every vertex lies on the
+  // ray through its own pixel, so moving it along that ray does not move where it lands —
+  // the frame is still the master, pixel for pixel. It is only once the camera moves that
+  // the choice matters, and then the flap travels with the foreground it belongs to and
+  // the gap opens behind it, where the layer below is waiting. See buildMesh below.
+  float disparity = aDepth < 0.0 ? texture(uDepth, aUv).r : aDepth;
 
   // Interpolate in *inverse* depth, not depth. Parallax is proportional to 1/z, so
   // interpolating 1/z is what makes displacement linear in the value the model gave us.
@@ -150,13 +185,6 @@ void main() {
                     ndc.y * uTanHalfFov,
                     -1.0) * z;
 
-  // How much does depth jump across one quad from here? Within a layer this should now
-  // be small everywhere — that is what the offline cut buys — so it survives as a
-  // diagnostic rather than as the fix it once had to be.
-  float dx = texture(uDepth, aUv + vec2(uGridStep.x, 0.0)).r - disparity;
-  float dy = texture(uDepth, aUv + vec2(0.0, uGridStep.y)).r - disparity;
-  vStretch = max(abs(dx), abs(dy));
-
   gl_Position = uViewProj * vec4(world, 1.0);
   vUv = aUv;
 }`;
@@ -164,13 +192,10 @@ void main() {
 const FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv;
-in float vStretch;
 uniform sampler2D uColor;
-uniform float uEdgeCut;    // 1.0 = draw everything; lower = cut on depth jump
 uniform float uAlphaCut;   // below this a fragment is not drawn at all
 out vec4 outColor;
 void main() {
-  if (vStretch > uEdgeCut) discard;
   vec4 c = texture(uColor, vUv);
   // Blend the edge, don't cut it. The plates now carry hard 0/255 alpha, so LINEAR
   // filtering turns each silhouette into a ramp exactly one texel wide — and since the
@@ -222,25 +247,109 @@ function texture(gl: WebGL2RenderingContext, img: HTMLImageElement, mipmap: bool
   return tex;
 }
 
-/** A flat grid of `cols x rows` vertices over -overscan .. 1+overscan, as a triangle mesh. */
-function buildGrid(cols: number, rows: number, overscan: number) {
+/**
+ * The depth map resampled onto the mesh's own vertices, on the CPU.
+ *
+ * Sampled exactly where the vertex shader samples it, including the overscan's clamp, so
+ * the CPU and the GPU agree about where the surface is. Nearest-neighbour on purpose:
+ * smoothing would average across the silhouettes this exists to find. Drawn at grid size
+ * rather than the plate's, so the readback is ~1024x572 and not 5504x3072.
+ */
+function sampleDepthGrid(
+  img: HTMLImageElement, cols: number, rows: number, overscan: number,
+): Float32Array {
+  const c = document.createElement('canvas');
+  c.width = cols; c.height = rows;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(img, 0, 0, cols, rows);
+  const px = ctx.getImageData(0, 0, cols, rows).data;
   const span = 1 + 2 * overscan;
-  const uvs = new Float32Array(cols * rows * 2);
+  const out = new Float32Array(cols * rows);
   for (let y = 0, i = 0; y < rows; y++) {
+    // The depth texture is uploaded with UNPACK_FLIP_Y, so uv.y 0 is the image's bottom.
+    const v = -overscan + span * (y / (rows - 1));
+    const sy = Math.round(Math.min(1, Math.max(0, 1 - v)) * (rows - 1));
+    for (let x = 0; x < cols; x++, i++) {
+      const u = -overscan + span * (x / (cols - 1));
+      const sx = Math.round(Math.min(1, Math.max(0, u)) * (cols - 1));
+      out[i] = px[(sy * cols + sx) * 4] / 255;
+    }
+  }
+  return out;
+}
+
+/**
+ * The mesh for one layer: a vertex grid, with the quads that bridge a silhouette snapped
+ * forward onto the near side instead of spanning the gap.
+ *
+ * **Why not simply drop them.** That was the previous answer and it is worse than doing
+ * nothing. A bridging quad is not wrong at home — at the reference camera every vertex is
+ * on the ray through its own pixel, so the reconstruction reprojects to the master exactly
+ * whatever depth it is given, and the stretch exists only once the camera moves. Removing
+ * the quad therefore removes something correct: measured on this master, 1.81% of quads
+ * dropped left **2.9% of the frame as an open hole with the camera perfectly still**, and
+ * what showed through was the half-resolution peeled plate, outlining every object in the
+ * room with a seven-pixel comb. The artifact looked like a tearing bug and was a hole.
+ *
+ * Snapping is the fix that costs nothing at rest and does the right thing in motion: the
+ * flap sits at the foreground's depth, so it travels with the object it belongs to, and
+ * the gap opens *behind* it — which is where the layer below is waiting. The quad keeps
+ * its own texture coordinates, so at rest it is still the master's own pixels.
+ *
+ * Before this, the tear was a per-vertex `vStretch` varying discarded in the fragment
+ * shader, which interpolated across the quad and left a sliver of stretched foreground
+ * welded to the background side: a comb of spikes along every silhouette that grew with
+ * camera motion. A quad bridges or it does not; there is no partial answer.
+ *
+ * Cheap to do here because it is view-independent — the depth map and the mesh are both
+ * static, so which quads bridge never changes.
+ *
+ * Vertices are (u, v, depthOverride), the override being negative wherever the depth map
+ * should be read normally.
+ */
+function buildMesh(
+  depth: Float32Array, cols: number, rows: number, overscan: number, cut: number,
+) {
+  const span = 1 + 2 * overscan;
+  const uvAt = (x: number, y: number): [number, number] => [
+    -overscan + span * (x / (cols - 1)),
+    -overscan + span * (y / (rows - 1)),
+  ];
+
+  const verts: number[] = [];
+  for (let y = 0; y < rows; y++) {
     for (let x = 0; x < cols; x++) {
-      uvs[i++] = -overscan + span * (x / (cols - 1));
-      uvs[i++] = -overscan + span * (y / (rows - 1));
+      const [u, v] = uvAt(x, y);
+      verts.push(u, v, -1);
     }
   }
   const indices = new Uint32Array((cols - 1) * (rows - 1) * 6);
-  for (let y = 0, i = 0; y < rows - 1; y++) {
+  let n = 0;
+  let flaps = 0;
+  for (let y = 0; y < rows - 1; y++) {
     for (let x = 0; x < cols - 1; x++) {
       const a = y * cols + x, b = a + 1, c = a + cols, d = c + 1;
-      indices[i++] = a; indices[i++] = c; indices[i++] = b;
-      indices[i++] = b; indices[i++] = c; indices[i++] = d;
+      let q0 = a, q1 = b, q2 = c, q3 = d;
+      if (cut < 1) {
+        const da = depth[a], db = depth[b], dc = depth[c], dd = depth[d];
+        const hi = Math.max(da, db, dc, dd);
+        if (hi - Math.min(da, db, dc, dd) > cut) {
+          // Four fresh vertices, same texture coordinates, all at the near depth.
+          const base = verts.length / 3;
+          for (const [vx, vy] of [[x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]]) {
+            const [u, v] = uvAt(vx, vy);
+            verts.push(u, v, hi);
+          }
+          q0 = base; q1 = base + 1; q2 = base + 2; q3 = base + 3;
+          flaps++;
+        }
+      }
+      indices[n++] = q0; indices[n++] = q2; indices[n++] = q1;
+      indices[n++] = q1; indices[n++] = q2; indices[n++] = q3;
     }
   }
-  return { uvs, indices };
+  return { verts: new Float32Array(verts), indices, flaps };
 }
 
 /**
@@ -250,9 +359,9 @@ function buildGrid(cols: number, rows: number, overscan: number) {
 export async function createRoomRenderer(opts: RoomRendererOptions): Promise<RoomRenderer | null> {
   const { canvas } = opts;
   if (opts.layers.length === 0) throw new Error('roomRenderer: no layers');
-  let fovY = ((opts.fovDeg ?? 42) * Math.PI) / 180;
-  let nearZ = opts.nearZ ?? 1.0;
-  let farZ = opts.farZ ?? 6.0;
+  let fovY = (opts.fovDeg * Math.PI) / 180;
+  let nearZ = opts.nearZ;
+  let farZ = opts.farZ;
   const cols = opts.gridCols ?? 1024;
   // 0.06 was not enough: a deep push with any lateral component walked the camera off
   // the mesh and showed the void as a black wedge down one side of the frame.
@@ -278,18 +387,35 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
   }
   gl.useProgram(program);
 
-  const { uvs, indices } = buildGrid(cols, rows, overscan);
-  const vao = gl.createVertexArray()!;
-  gl.bindVertexArray(vao);
-  const vbo = gl.createBuffer()!;
-  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-  gl.bufferData(gl.ARRAY_BUFFER, uvs, gl.STATIC_DRAW);
-  const loc = gl.getAttribLocation(program, 'aUv');
-  gl.enableVertexAttribArray(loc);
-  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  const ibo = gl.createBuffer()!;
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  // A mesh per layer, because each layer's silhouettes are its own. The vertex grid is
+  // identical between them; only the snapped-forward flaps differ.
+  const aUvLoc = gl.getAttribLocation(program, 'aUv');
+  const aDepthLoc = gl.getAttribLocation(program, 'aDepth');
+  const cuts = opts.layers.map((l) => l.edgeCut ?? 1.0);
+  const grids = images.map(([, d]) => sampleDepthGrid(d, cols, rows, overscan));
+  const meshes = grids.map(() => ({
+    vao: gl.createVertexArray()!,
+    vbo: gl.createBuffer()!,
+    ibo: gl.createBuffer()!,
+    count: 0,
+  }));
+  function rebuild(i: number) {
+    const m = meshes[i];
+    const { verts, indices, flaps } = buildMesh(grids[i], cols, rows, overscan, cuts[i]);
+    m.count = indices.length;
+    gl!.bindVertexArray(m.vao);
+    gl!.bindBuffer(gl!.ARRAY_BUFFER, m.vbo);
+    gl!.bufferData(gl!.ARRAY_BUFFER, verts, gl!.STATIC_DRAW);
+    gl!.enableVertexAttribArray(aUvLoc);
+    gl!.vertexAttribPointer(aUvLoc, 2, gl!.FLOAT, false, 12, 0);
+    gl!.enableVertexAttribArray(aDepthLoc);
+    gl!.vertexAttribPointer(aDepthLoc, 1, gl!.FLOAT, false, 12, 8);
+    gl!.bindBuffer(gl!.ELEMENT_ARRAY_BUFFER, m.ibo);
+    gl!.bufferData(gl!.ELEMENT_ARRAY_BUFFER, indices, gl!.STATIC_DRAW);
+    gl!.bindVertexArray(null);
+    return flaps;
+  }
+  for (let i = 0; i < grids.length; i++) rebuild(i);
 
   // flipY so uv (0,0) is the bottom-left of the image, matching NDC's y-up.
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -308,8 +434,6 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     invNear: gl.getUniformLocation(program, 'uInvNear'),
     invFar: gl.getUniformLocation(program, 'uInvFar'),
     viewProj: gl.getUniformLocation(program, 'uViewProj'),
-    gridStep: gl.getUniformLocation(program, 'uGridStep'),
-    edgeCut: gl.getUniformLocation(program, 'uEdgeCut'),
     alphaCut: gl.getUniformLocation(program, 'uAlphaCut'),
   };
   gl.uniform1i(u.color, 0);
@@ -318,9 +442,6 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
   gl.uniform1f(u.imageAspect, imageAspect);
   gl.uniform1f(u.invNear, 1 / nearZ);
   gl.uniform1f(u.invFar, 1 / farZ);
-  const span = 1 + 2 * overscan;
-  gl.uniform2f(u.gridStep, span / (cols - 1), span / (rows - 1));
-  gl.uniform1f(u.edgeCut, 1.0);
   gl.uniform1f(u.alphaCut, 0.05);
   gl.enable(gl.DEPTH_TEST);
   // Back to front, so ordinary source-over blending is already in the right order and no
@@ -391,7 +512,8 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
       gl!.clear(gl!.DEPTH_BUFFER_BIT);
       gl!.activeTexture(gl!.TEXTURE0); gl!.bindTexture(gl!.TEXTURE_2D, textures[i].color);
       gl!.activeTexture(gl!.TEXTURE1); gl!.bindTexture(gl!.TEXTURE_2D, textures[i].depth);
-      gl!.drawElements(gl!.TRIANGLES, indices.length, gl!.UNSIGNED_INT, 0);
+      gl!.bindVertexArray(meshes[i].vao);
+      gl!.drawElements(gl!.TRIANGLES, meshes[i].count, gl!.UNSIGNED_INT, 0);
     }
 
     if (running) raf = requestAnimationFrame(frame);
@@ -443,8 +565,15 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
       fovY = (deg * Math.PI) / 180;
       gl!.uniform1f(u.tanHalfFov, Math.tan(fovY / 2));
     },
-    setEdgeCut(threshold) {
-      gl!.uniform1f(u.edgeCut, threshold);
+    setEdgeCut(threshold, layer) {
+      // Rebuilds a mesh rather than setting a uniform. A few milliseconds, and only ever
+      // from the dev harness's slider — the site sets it once, from the scene.
+      const targets = layer === undefined ? cuts.map((_, i) => i) : [layer];
+      for (const i of targets) {
+        if (i < 0 || i >= cuts.length || cuts[i] === threshold) continue;
+        cuts[i] = threshold;
+        rebuild(i);
+      }
     },
     setSoloLayer(index) {
       solo = index;
@@ -458,9 +587,11 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
         gl!.deleteTexture(t.color);
         gl!.deleteTexture(t.depth);
       }
-      gl!.deleteBuffer(vbo);
-      gl!.deleteBuffer(ibo);
-      gl!.deleteVertexArray(vao);
+      for (const m of meshes) {
+        gl!.deleteBuffer(m.vbo);
+        gl!.deleteBuffer(m.ibo);
+        gl!.deleteVertexArray(m.vao);
+      }
       gl!.deleteProgram(program);
     },
   };

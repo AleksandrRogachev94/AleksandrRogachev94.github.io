@@ -97,6 +97,40 @@ export function imagePointToWorld(
 }
 
 /**
+ * How far the room slides under a screen-space overlay when the camera translates.
+ *
+ * Hotspot rects are authored against the master and placed by `imageRectToScreen`, which
+ * knows the viewport and nothing else — so at rest they are nailed to the screen while the
+ * art parallaxes underneath them. That was invisible while ambient motion peaked at 0.042m
+ * (~15px of slip at mid-room depth) and is not at 0.115m (~41px).
+ *
+ * The slip is pure perspective and depends only on depth, so one pair of coefficients
+ * serves every hotspot: multiply by the object's own `1/z` to get its offset in CSS px.
+ * `imagePointToWorld` already turns a hotspot's `disparity` into exactly that reciprocal,
+ * which is why the depth never has to be stored twice.
+ *
+ * Returned as coefficients rather than applied here because the camera moves 60 times a
+ * second and the rects do not: the caller writes these into two custom properties and the
+ * stylesheet does the multiply, the same division of labour `--push` already uses.
+ */
+export function parallaxCoeff(
+  dx: number,
+  dy: number,
+  viewW: number,
+  viewH: number,
+  opts: { fovDeg: number; imageAspect: number },
+): { kx: number; ky: number } {
+  const c = cover(viewW, viewH, opts.imageAspect);
+  const tanHalf = Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
+  // Moving the eye right slides the art left; moving it up slides the art down. Both are
+  // the renderer's own `world - camera`, read back out in image coordinates.
+  return {
+    kx: (-dx * c.width) / (2 * tanHalf * opts.imageAspect),
+    ky: (dy * c.height) / (2 * tanHalf),
+  };
+}
+
+/**
  * Where a rect on the art has ended up on screen once the camera has pushed `travel` of
  * the way toward `aim`.
  *

@@ -76,7 +76,15 @@ def main() -> None:
         if not dp.exists():
             raise SystemExit(f"missing {dp}")
         for src, lossless in ((cp, False), (dp, True)):
-            write(Image.open(src), src.stem, lossless, args.depth_scale if lossless else 1.0)
+            im = Image.open(src)
+            # WebP has no 16-bit mode and PIL does not refuse the job: handed an I;16
+            # image it writes a file that reopens as RGB and decodes to noise. Silent, and
+            # invisible until the mesh is built from it. Fail here instead.
+            if lossless and im.mode not in ("L", "P", "RGB", "RGBA"):
+                raise SystemExit(f"{src}: depth is {im.mode}; WebP cannot carry more than "
+                                 f"8 bits per channel and PIL corrupts it silently. "
+                                 f"Write the plate at 8-bit.")
+            write(im, src.stem, lossless, args.depth_scale if lossless else 1.0)
     print(f"\n{total:.1f} KB total")
 
 
