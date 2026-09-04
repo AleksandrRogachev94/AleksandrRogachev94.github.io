@@ -1,0 +1,91 @@
+{
+  "_comment": [
+    "SAM prompts for the room's HOTSPOTS - the objects you can click. Same schema as",
+    "objects.json and the same tool (tools/pick.py --objects), but a different question,",
+    "so a different file.",
+    "",
+    "objects.json answers 'what hides what', which is the LAYERED build's occlusion graph.",
+    "The splat build has no layers, nothing to inpaint and no plates to cut, so it never",
+    "asks that question at all. What it still needs a mask for is narrower and unrelated:",
+    "",
+    "  wake      tools/wake.py bakes the object's own light from the mask - the hover",
+    "            affordance. This is the only thing that consumes a mask in this build.",
+    "  rect      the mask's bounding box IS the tap target in src/data/hotspots.ts, so",
+    "            what lights up and what accepts the click are the same object rather",
+    "            than two hand-mapped approximations of it.",
+    "",
+    "So an entry here means 'this is clickable', never 'this occludes something'. Only",
+    "hotspots belong in this file - three, not sixteen.",
+    "",
+    "  box       drag one in pick.py. The STRONGEST prompt - start here.",
+    "  points / negative   SAM click prompts, for carving one thing out of a group.",
+    "  open_frame  genuinely see-through, so enclosed holes are real background.",
+    "",
+    "SEEDED, NOT PICKED. No coordinates below: they are properties of one master, and the",
+    "master was replaced on 2026-09-03. Open each in pick.py, prompt it, save. Coordinates",
+    "are normalised 0-1 so they survive re-export at another size.",
+    "",
+    "  tools/.venv/bin/python tools/pick.py --color art/room-day-summer.jpg \\",
+    "      --objects art/hotspots.json --mask-dir art/build/masks-hotspots"
+  ],
+  "objects": [
+    {
+      "name": "feeder",
+      "why": "BirdLense. The subject is the feeder itself, not the window it is seen through - the old master mapped the whole window because the monocular depth model read glass as one flat plane and put the yard on it, so aiming at the feeder aimed at a wall. The splat build reconstructs the yard as real geometry at its real distance, so the hotspot can finally be the thing the project is about. Small and outdoors: prompt it with a tight box, then negatives for the fence pickets behind it.",
+      "points": [
+        [
+          0.2995,
+          0.3974
+        ],
+        [
+          0.2639,
+          0.352
+        ],
+        [
+          0.2647,
+          0.386
+        ]
+      ],
+      "negative": [
+        [
+          0.2752,
+          0.3691
+        ],
+        [
+          0.2755,
+          0.401
+        ]
+      ]
+    },
+    {
+      "name": "robot",
+      "why": "RoboTrail. New to this master - it now sits on the rug in the open floor, unmissable and reading as clickable whether or not it is wired up. Its focus state and page are a later increment; until then the rect and wake make it an ordinary link. Box it, then negatives for the rug pattern, which is high-contrast and close in tone to the chassis.",
+      "box": [
+        0.4345,
+        0.7411,
+        0.56,
+        0.9189
+      ]
+    },
+    {
+      "name": "monitor",
+      "why": "The software bench. The ultrawide ALONE, never the pair: framing both put the aim point in the gap between two bezels, so the camera spent the whole approach converging on a seam and the arrival never read as landing on a screen. The vertical secondary stays room, like the guitar and the printer. The wake needs the screen itself, which is near-black by construction, because that is where added light reads instantly.",
+      "box": [
+        0.6415,
+        0.3969,
+        0.8012,
+        0.523
+      ],
+      "negative": [
+        [
+          0.7209,
+          0.5269
+        ],
+        [
+          0.7204,
+          0.5206
+        ]
+      ]
+    }
+  ]
+}

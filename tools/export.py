@@ -39,8 +39,13 @@ def main() -> None:
     args = ap.parse_args()
 
     plates = sorted(args.prefix.parent.glob(f"{args.prefix.name}-layer*[0-9].png"))
-    if not plates:
-        raise SystemExit(f"no {args.prefix.name}-layerN.png - run tools/inpaint.py first")
+    # Plates belong to the LAYERED build. The splat build has none - its geometry ships as
+    # the four rasters tools/sharp_splat_bake.py writes - but it still needs the poster the
+    # site shows without WebGL2 or under prefers-reduced-motion, so `--master` alone is a
+    # complete run. Only refuse when there is nothing at all to write.
+    if not plates and not args.master and not args.picking_depth:
+        raise SystemExit(f"no {args.prefix.name}-layerN.png - run tools/inpaint.py first, "
+                         f"or pass --master to export the poster alone (splat build)")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     total = 0

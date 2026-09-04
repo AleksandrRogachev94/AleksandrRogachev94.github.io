@@ -32,3 +32,8 @@ tools/__pycache__/
 # everything tools/ derives from the master (see docs/SCENE.md).
 # art/ itself keeps only the four authored inputs; art/build/ regenerates from them.
 art/build/
+
+# SHARP's reconstruction. 63MB, and a tool output rather than an authored input - the
+# rasters the site actually loads are baked from it into public/art/ and committed there.
+# Keep it outside git; see art/README.md.
+art/*.ply

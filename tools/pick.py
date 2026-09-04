@@ -17,6 +17,19 @@ normalised 0-1 points in the same file. Nothing here is a second source of truth
 
 Then open http://localhost:8765.
 
+**Under the splat build this tool is the only stage that runs SAM at all.** There are no
+layers to assign, nothing behind an object to inpaint and no plates to cut, so the single
+surviving use for a mask is the hotspot: `wake.py` bakes the object's own light from it,
+and its bounding box is the tap target that goes into `hotspots.ts`. Pass `--mask-dir` and
+every save writes that mask beside the points and prints the rect, which retires
+`segment.py`'s batch run for this build:
+
+    tools/.venv/bin/python tools/pick.py \
+      --color art/room-day-summer.jpg --objects art/objects.json \
+      --mask-dir art/build/masks
+
+That also means only the hotspots need prompting - three objects, not sixteen.
+
   + new             create an object that is not in objects.json yet
   DRAG              draw a bounding box - the strongest prompt, use it for anything
                     large or cluttered (the desk, the cabinet, a bookshelf)
@@ -205,6 +218,7 @@ class Picker(BaseHTTPRequestHandler):
     color: np.ndarray
     seg: object
     spec_path: Path
+    mask_dir: Path | None = None
 
     def log_message(self, *a):  # one line per click is noise, not information
         pass
@@ -239,22 +253,33 @@ class Picker(BaseHTTPRequestHandler):
             return self._json(self.create(body))
         self._send(404, "text/plain", b"no")
 
-    def predict(self, body):
-        h, w = self.color.shape[:2]
-        pts = body["points"]
-        pos = [(p[0], p[1]) for p in pts if p[2]]
-        neg = [(p[0], p[1]) for p in pts if not p[2]]
-        box = body.get("box")
+    def _mask(self, pos, neg, box, open_frame):
+        """The mask these prompts produce, identical to what segment.py would write.
+
+        Shared by `predict` (which draws it) and `save` (which writes it), so the picture
+        on screen and the file on disk can never come from two different code paths.
+
+        **Takes prompts, not the request body.** The two callers do not agree on shape:
+        /predict posts `points` as triples [x, y, isPositive] because that is what the
+        canvas holds, while /save has already split them into `points` and `negative`
+        lists of pairs, which is the shape objects.json stores. A helper that read the
+        body directly worked for one caller and raised IndexError for the other - and
+        only for objects that HAVE points, so an object prompted with a bare box passed
+        and hid it. Naming the three prompts in the signature is what makes that
+        impossible.
+
+        Returns (mask, score, filled, matted), or None when there is nothing to prompt on.
+        """
+        pos, neg = [tuple(p[:2]) for p in pos], [tuple(p[:2]) for p in neg]
         if not pos and not box:
-            return {"mask": "", "score": 0.0, "area": 0.0, "filled": 0, "matted": 0}
+            return None
         mask, score = self.seg.predict(pos, neg, box)
 
-        # Exactly what segment.py will do with the same points, so what you see here is
-        # what ships. An enclosed hole is a defect in a solid object and correct in a
-        # see-through one; only the flag tells them apart. See-through objects also get
-        # the matting pass, because that is where SAM's blobbing actually shows.
+        # An enclosed hole is a defect in a solid object and correct in a see-through
+        # one; only the flag tells them apart. See-through objects also get the matting
+        # pass, because that is where SAM's blobbing actually shows.
         filled = matted = 0
-        if body.get("open_frame"):
+        if open_frame:
             before = int((mask > 0).sum())
             mask = refine_matte(self.color, mask, device=self.seg.device)
             matted = int((mask > 0).sum()) - before
@@ -262,6 +287,16 @@ class Picker(BaseHTTPRequestHandler):
             closed = fill_holes(mask)
             filled = int((closed > 0).sum() - (mask > 0).sum())
             mask = closed
+        return mask, score, filled, matted
+
+    def predict(self, body):
+        h, w = self.color.shape[:2]
+        pts = body["points"]
+        got = self._mask([p for p in pts if p[2]], [p for p in pts if not p[2]],
+                         body.get("box"), body.get("open_frame"))
+        if got is None:
+            return {"mask": "", "score": 0.0, "area": 0.0, "filled": 0, "matted": 0}
+        mask, score, filled, matted = got
 
         sel = mask > 0
         # Translucent fill, opaque outline: the fill shows what is claimed, the outline
@@ -335,8 +370,31 @@ class Picker(BaseHTTPRequestHandler):
         print(f"  saved {body['name']}: {len(body['points'])} positive, "
               f"{len(body['negative'])} negative"
               + (", box" if body.get("box") else ""))
+
+        # Under the splat build this is the whole of stages 2 and 3. There is no layer to
+        # assign the object to, nothing behind it to inpaint, and no plate to cut - the
+        # only thing a mask is still for is the hotspot: `wake.py` bakes the object's own
+        # light from it, and its bounding box IS the tap target in hotspots.ts. Writing it
+        # here means the mask that ships is the one that was on screen when it was
+        # approved, rather than a batch re-run that could differ.
+        rect = None
+        if self.mask_dir is not None:
+            got = self._mask(body["points"], body["negative"], body.get("box"),
+                             body.get("open_frame"))
+            if got is not None:
+                mask = got[0]
+                self.mask_dir.mkdir(parents=True, exist_ok=True)
+                out = self.mask_dir / f"{body['name']}.png"
+                cv2.imwrite(str(out), mask)
+                ys, xs = np.nonzero(mask)
+                if len(xs):
+                    h, w = mask.shape[:2]
+                    rect = [round(xs.min() / w, 4), round(ys.min() / h, 4),
+                            round((xs.max() + 1) / w, 4), round((ys.max() + 1) / h, 4)]
+                    print(f"    -> {out}   rect: [{', '.join(f'{v}' for v in rect)}]")
+
         return {"ok": True, "points": body["points"], "negative": body["negative"],
-                "box": obj.get("box")}
+                "box": obj.get("box"), "rect": rect}
 
 
 def main() -> None:
@@ -348,6 +406,11 @@ def main() -> None:
                     help=f"one of {sorted(MODELS)}; pass the same one to segment.py")
     ap.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--mask-dir", type=Path,
+                    help="also write <name>.png here on every save, and print its "
+                         "bounding box normalised. This is all the splat build needs "
+                         "from SAM - hotspot wakes and tap targets - so with it set, "
+                         "segment.py never has to run.")
     args = ap.parse_args()
 
     color = cv2.imread(str(args.color), cv2.IMREAD_COLOR)
@@ -363,6 +426,7 @@ def main() -> None:
     Picker.seg = Segmenter(color, args.model, args.device)
     Picker.color = color
     Picker.spec_path = args.objects
+    Picker.mask_dir = args.mask_dir
     print(f"\n  http://localhost:{args.port}   (ctrl-c to stop)\n")
     HTTPServer(("127.0.0.1", args.port), Picker).serve_forever()
 

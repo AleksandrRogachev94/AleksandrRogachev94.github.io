@@ -168,9 +168,9 @@ export const SHARP_SPLAT: SceneBuild = {
   still: `${ART}.webp`,
   width: 5504,
   height: 3072,
-  // Straight out of the PLY. The room really is 1.03m to 113m deep.
-  nearZ: 1.033,
-  farZ: 112.96,
+  // Straight out of the PLY. The room really is 1.03m to 107.5m deep.
+  nearZ: 1.030,
+  farZ: 107.50,
   fovDeg: 38.73,
   // ml-sharp's own budget (compute_max_offset): 8% of the image diagonal of sweep at the
   // nearest content's distance. `ROOM_TUNING`'s ambient peaks at 0.115 against this — see

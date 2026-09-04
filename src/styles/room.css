@@ -6,8 +6,9 @@
  * exactly one `--accent`.
  *
  * **The shape of the transition, since it is spread across three files.** The camera moves
- * for `--push-ms` and stops with the monitor filling ~76% of the frame — it never tries to
- * travel the last stretch, because that is the part a displaced mesh cannot reconstruct.
+ * for `--push-ms` and stops with the monitor filling ~98% of the frame — it never tries to
+ * travel the last stretch, because that is the part the reconstruction cannot deliver: the
+ * splats magnify with the push and pass the veil that hides them.
  * The remaining distance is covered by the monitor's *screen* rather than by the camera:
  * the panel arrives at exactly the rectangle the screen has reached, lit, as though the
  * backlight had come up, and then pushes its own edges off the frame. Move toward the

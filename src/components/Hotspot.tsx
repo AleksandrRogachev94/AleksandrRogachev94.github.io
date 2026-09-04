@@ -17,7 +17,7 @@
  * Re-projecting every frame would buy nothing and cost a layout pass per hotspot.
  *
  * **The affordance is the object's own light coming up** — the monitor wakes — baked by
- * tools/wake.py from the SAM mask the layer pipeline already cuts. Three earlier attempts
+ * tools/wake.py from the SAM mask tools/pick.py cuts for it. Three earlier attempts
  * are worth not repeating. A bordered rectangle reads as a debug overlay. A soft accent
  * glow over the whole *rect* was invisible, because `screen` blending adds light and there
  * is very little to add to sunlit warm art. And a hairline rim on the true silhouette,

@@ -26,8 +26,9 @@ export interface Hotspot {
   accent: string;
   /**
    * The tap target, and the box the label hangs off. Taken from the bounding box of the
-   * same SAM mask the rim is derived from, so what lights up and what accepts the click
-   * are the same object rather than two hand-mapped approximations of it.
+   * same SAM mask the wake is baked from, so what lights up and what accepts the click
+   * are the same object rather than two hand-mapped approximations of it. `pick.py
+   * --mask-dir` prints this line on save; it is copied, not measured by eye.
    */
   rect: NormRect;
   /**
@@ -64,22 +65,28 @@ export interface Hotspot {
    */
   disparity: number;
   /**
-   * Fraction of the way to the aim point the push travels. Never 1 — the mesh smears and
-   * the master goes soft long before then, and the arrival is covered by the focus state
-   * rather than delivered by the art.
+   * Fraction of the way to the aim point the push travels. Never 1 — the reconstruction
+   * runs out of resolution before the camera runs out of distance, and the arrival is
+   * covered by the focus state rather than delivered by the art.
    *
    * **Set by how much of the frame the object should end up filling, not by taste.** An
    * object at the aim depth subtends `1 / (1 - travel)` of its at-rest size, so the
-   * ultrawide's 0.168 of frame width becomes 0.76 at travel 0.78 — it dominates the frame
-   * without the camera ever trying to reconstruct the last stretch, which is the part a
-   * displaced mesh cannot deliver. The screen itself carries the rest of the distance by
-   * becoming the panel.
+   * ultrawide's 0.158 of frame width becomes 0.98 at travel 0.84 — it fills the frame
+   * edge to edge, and past that its bezels leave frame while the camera magnifies a dark
+   * gradient, because PROMPTS.md keeps content off the painted screen.
    *
-   * The ceiling on that number is the depth *spread* around the target, not the distance
-   * to it: the global excursion readout in /dev/room is a worst case dominated by whatever
-   * is nearest in frame — here the fig, which leaves frame early in a push to the right.
-   * Around the monitor the real spread is desk (0.358) against alcove wall (0.299), which
-   * at travel 0.78 asks for ~153px of painted band against the 344px the plates carry.
+   * **The ceiling is splat magnification, and it is per-object.** A push magnifies the
+   * reconstruction by `1 / (1 - travel)`, and SHARP's 768 grid on this master is 7.17
+   * master px per splat across — ~2.1 CSS px at rest on a 1600px viewport. At travel 0.84
+   * that is ~13 screen px per splat, against the 9px blur and 0.12 brightness room.css
+   * has faded in by the end of the push. Objects narrower than the monitor hit that wall
+   * before they fill the frame: the rover would need 0.89 (~19px splats) and the feeder
+   * 0.95, so both are capped below their fill target. `tools/splat_probe.py --travel`
+   * prints this trade for any aim point.
+   *
+   * Distance also changes what the number means, because it is a fraction of the ray to
+   * the target, not an absolute. 0.84 of the monitor's 4.51m is 3.8m; the same fraction
+   * of the feeder's 8.31m would fly the camera through the glass.
    */
   travel: number;
   /**
@@ -97,22 +104,51 @@ export interface Hotspot {
 
 export const HOTSPOTS: readonly Hotspot[] = [
   {
-    id: 'window',
-    label: 'the window',
-    // Anchors into the real document rather than a page that does not exist yet. The
-    // window is mapped now because mapping is one pass for the whole room; BirdLense's own
-    // focus state and page are a later increment.
+    id: 'feeder',
+    label: 'the bird feeder',
+    // Anchors into the real document rather than a page that does not exist yet.
     href: '/#birdlense',
     accent: 'var(--accent-birdlense)',
-    rect: [0.048, 0.0, 0.412, 0.72],
-    wake: '/art/wake-window.webp',
-    wakeRect: [0.0131, 0.0, 0.4469, 0.776],
-    // The feeder, which is the subject — but at the window plane's depth, because the
-    // depth model reads glass as one flat surface and the yard behind it is not in the map.
-    aim: [0.18, 0.44],
-    disparity: 0.3,
-    travel: 0.6,
-    // BirdLense's focus state is a later increment; until then this is a plain link.
+    // The feeder itself, not the window it is seen through. The old master had to map the
+    // whole window because a monocular depth model reads glass as one flat plane and put
+    // the yard on it, so aiming at the feeder aimed at a wall. The splat build
+    // reconstructs the yard as real geometry at its real distance, so the hotspot can
+    // finally be the thing the project is about.
+    rect: [0.2458, 0.3441, 0.3051, 0.4561],
+    wake: '/art/wake-feeder.webp',
+    wakeRect: [0.2217, 0.2865, 0.3372, 0.4805],
+    // **Not the mask centroid**, which is the one aim here that had to be authored. The
+    // centroid is [0.281, 0.383] and lands on a window mullion: it measures p75 0.255 -
+    // the frame at 4m - against the yard's 0.116 at 8.3m. A column scan found x=0.280
+    // straddling at every height with 0.265 and 0.290 clean. Aim between the bars.
+    aim: [0.265, 0.385],
+    // 8.31m, measured with tools/splat_probe.py.
+    disparity: 0.116,
+    // Deliberately short, and NOT set by frame fill like the monitor below. The feeder is
+    // 0.059 of frame width, so filling the frame would need travel 0.95 - and 0.95 of
+    // 8.31m is a 7.9m translation that flies the camera through the glass and leaves the
+    // room behind it. Distance changes what `travel` means: it is a fraction of a much
+    // longer ray. BirdLense's focus state is a later increment and will want a close-
+    // plate to carry the last stretch, as the ladder in docs/PROMPTS.md intends.
+    travel: 0.55,
+  },
+  {
+    id: 'robot',
+    label: 'the rover',
+    href: '/#robotrail',
+    accent: 'var(--accent-robotrail)',
+    rect: [0.4459, 0.7516, 0.5509, 0.9102],
+    wake: '/art/wake-robot.webp',
+    wakeRect: [0.4164, 0.707, 0.5821, 0.9531],
+    aim: [0.5, 0.835],
+    // 3.18m, and clean - p25 0.316 / p75 0.318 - because the rover sits in open floor
+    // with nothing crossing in front of it.
+    disparity: 0.317,
+    // 0.75 of frame width. Filling it outright needs travel 0.89, which magnifies 9.1x
+    // and puts one splat at ~19 screen px against the 9px veil room.css fades in: at
+    // 0.105 of frame width the rover runs out of reconstruction before it runs out of
+    // frame. RoboTrail's focus state is a later increment; revisit then.
+    travel: 0.86,
   },
   {
     id: 'monitor',
@@ -121,16 +157,30 @@ export const HOTSPOTS: readonly Hotspot[] = [
     accent: 'var(--accent-flowlab)',
     // The ultrawide alone, not the pair. Framing both put the aim point in the *gap*
     // between two bezels, so the camera spent the whole approach converging on a seam and
-    // the arrival never read as landing on a screen. The ultrawide is the surface the
-    // bench becomes; the vertical secondary stays room, like the guitar and the printer.
-    rect: [0.726, 0.424, 0.894, 0.616],
+    // the arrival never read as landing on a screen. The vertical secondary stays room,
+    // like the guitar and the printer. The stand is deliberately NOT in the mask: it is
+    // only 6% of the area, but it sits in the wake's near-crisp *fill* rather than in its
+    // outward spill, so it read as an emissive pillar under the screen. The screen is the
+    // thing that lights up; the stand receives that light like the desk does.
+    rect: [0.6434, 0.3981, 0.8011, 0.5254],
     wake: '/art/wake-monitor.webp',
-    wakeRect: [0.6919, 0.362, 0.9281, 0.6628],
-    // The screen's own centre, so the panel that grows out of it is growing out of the
-    // thing you were looking at.
-    aim: [0.81, 0.52],
-    disparity: 0.314,
-    travel: 0.78,
+    wakeRect: [0.6083, 0.3359, 0.8358, 0.5794],
+    // The screen's own centre, which is now also the mask centroid (0.457) since the
+    // stand came out.
+    aim: [0.723, 0.457],
+    // 4.51m. Spread across the sample window is 0.001 - a flat frontal panel is the
+    // easiest thing in the room to get a depth reading on.
+    disparity: 0.221,
+    // **Set by frame fill, and the fill is now ~1.0 rather than the 0.76 it was.** At
+    // 0.158 of frame width the screen reaches 0.98 of the frame at travel 0.84, which is
+    // the point of diminishing return in both directions: past it the bezels leave frame
+    // and the camera is magnifying a dark gradient, because PROMPTS.md keeps content off
+    // the painted screen and there is nothing further in to see.
+    //
+    // The cost is measured, not assumed: 6.25x magnification puts one splat at ~13 screen
+    // px on a 1600px viewport, against the 9px blur and 0.12 brightness room.css has
+    // faded in by the end of the push. If that ever reads badly, this number is the dial.
+    travel: 0.84,
     focusState: 'bench',
   },
 ];

@@ -14,11 +14,12 @@
  * The order of events, and why each boundary is where it is:
  *
  *   0                                  the click. The camera starts moving.
- *   pushMs                             the camera has arrived, and the screen is now ~76%
- *                                      of the frame. It stops here for good — the last
- *                                      stretch is the part a displaced mesh cannot
- *                                      reconstruct. The panel takes over on this exact
- *                                      frame, at exactly the rectangle the screen reached.
+ *   pushMs                             the camera has arrived, and the screen is now ~98%
+ *                                      of the frame. It stops here for good — past this
+ *                                      the bezels leave frame and the splats magnify
+ *                                      faster than the veil hides them. The panel takes
+ *                                      over on this exact frame, at exactly the rectangle
+ *                                      the screen reached.
  *   pushMs + takeoverMs                the panel covers the viewport — genuinely black by
  *                                      now, both the room (dimmed to ~12%) and the panel
  *                                      itself, so the room can stop drawing.
