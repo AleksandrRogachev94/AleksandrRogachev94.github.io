@@ -61,6 +61,14 @@ export interface SplatRendererOptions {
   /** Directory + basename the bake wrote, e.g. `/art/room-day-summer`. */
   assetPrefix: string;
   /**
+   * Fraction of the room's bytes that have arrived, 0..1, called as they stream in.
+   *
+   * The renderer is 8.9MB and cannot draw a single frame until all four rasters have
+   * landed (they are one `Promise.all`), so without this the room is a blank rectangle for
+   * as long as that takes. Never called if the server omits `Content-Length`.
+   */
+  onProgress?: (fraction: number) => void;
+  /**
    * Quad half-extent in standard deviations. 2 is the usual choice: beyond it the Gaussian
    * is under 1.4% of its peak and the extra fragments are shaded for nothing.
    */
@@ -361,10 +369,41 @@ interface Raster {
  * same bytes, same shader, same canvas size. `verifyGeomRaster` is no longer the only
  * guard — see the checksum in `createSplatRenderer`.
  */
-async function loadRaster(src: string): Promise<Raster> {
-  const res = await fetch(src);
-  if (!res.ok) throw new Error(`failed to load ${src}: ${res.status}`);
-  const buf = await res.arrayBuffer();
+async function loadRaster(res: Response, onBytes?: (n: number) => void): Promise<Raster> {
+  if (!res.ok) throw new Error(`failed to load ${res.url}: ${res.status}`);
+
+  // Streamed rather than `res.arrayBuffer()` purely so the room can report how far along it
+  // is. The bytes are concatenated and handed to exactly the same decoder as before — the
+  // long comment above is about which decoder is allowed to touch these pixels, and this
+  // changes nothing about that.
+  //
+  // `body` is absent on a few paths (mocked responses, very old Safari), so the
+  // whole-buffer read stays as the fallback: no progress, same picture.
+  // Typed as what it is for rather than as the union of what produces it. `Uint8Array` is
+  // generic in its backing buffer, so a bare `Uint8Array` is `Uint8Array<ArrayBufferLike>`
+  // — which admits `SharedArrayBuffer` and is therefore not a `BlobPart`. Neither branch
+  // here can produce one; saying `BlobPart` states that, and keeps the constraint at the
+  // declaration instead of casting it away at the call.
+  let buf: BlobPart;
+  if (onBytes && res.body) {
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+      onBytes(value.byteLength);
+    }
+    const joined = new Uint8Array(total);
+    let at = 0;
+    for (const c of chunks) { joined.set(c, at); at += c.byteLength; }
+    buf = joined;
+  } else {
+    buf = await res.arrayBuffer();
+  }
+
   const bmp = await createImageBitmap(new Blob([buf]), {
     colorSpaceConversion: 'none',
     premultiplyAlpha: 'none',
@@ -475,10 +514,37 @@ export async function createSplatRenderer(
     await fetch(`${assetPrefix}-splat.json`, { cache: 'no-cache' })
   ).json();
   const v = m.version ? `?v=${m.version}` : '';
-  const [geomRaster, colorRaster, shapeRaster, quatRaster] = await Promise.all(
+
+  // **Headers first, then bodies.** `fetch` settles as soon as the response headers land,
+  // so asking for all four up front costs no extra round trips and gives an exact byte
+  // total *before* any progress is reported. Summing `Content-Length` as each body starts
+  // instead would mean a denominator that grows while the bar is moving, which shows up as
+  // a bar that slides backwards.
+  //
+  // Content-Length rather than a figure in the manifest: these are WebP, so nothing on the
+  // wire re-compresses them and the header is exactly what the decoder will receive. A
+  // server that omits it leaves `total` at 0, `onBytes` undefined, and the room simply
+  // appears when it is ready — the poster underneath is what makes that acceptable.
+  const responses = await Promise.all(
     ['geom', 'color', 'shape', 'quat']
-      .map((n) => loadRaster(`${assetPrefix}-splat-${n}.webp${v}`)),
+      .map((n) => fetch(`${assetPrefix}-splat-${n}.webp${v}`)),
   );
+  const total = responses.reduce(
+    (n, r) => n + Number(r.headers.get('content-length') ?? 0), 0,
+  );
+
+  let seen = 0;
+  const onBytes = total && opts.onProgress
+    ? (n: number) => { seen += n; opts.onProgress!(Math.min(1, seen / total)); }
+    : undefined;
+
+  const [geomRaster, colorRaster, shapeRaster, quatRaster] =
+    await Promise.all(responses.map((r) => loadRaster(r, onBytes)));
+
+  // Decoding and upload still take a beat after the last byte lands, so this is the bar
+  // reaching full, not the room being drawable. The caller's own completion is what says
+  // the room can be shown.
+  opts.onProgress?.(1);
 
   const program = gl.createProgram()!;
   gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERT));

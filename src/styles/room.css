@@ -44,6 +44,9 @@
   /* Written every frame by the rig: 0 at rest, 1 fully pushed in. The only channel
    * between the camera and the DOM, so the push costs no React renders. */
   --push: 0;
+  /* Fraction of the room's bytes that have arrived. Written from the fetch, not the rig,
+   * and only while the poster is up. */
+  --load: 0;
   /* The timeline. Room.tsx overwrites all five from transition.ts, which is the source of
    * truth; these are here so the file can be read on its own and so nothing breaks if the
    * island fails to hydrate. */
@@ -105,10 +108,71 @@
     brightness(calc(1 - max(0, var(--push) * 1.6 - 0.72)));
 }
 
-/* No WebGL2: the same framing, as a flat image. */
+/* ---- the poster and the load ----------------------------------------------
+ *
+ * The splat build cannot draw a single frame until all four rasters have arrived — they
+ * are one `Promise.all` — so for 8.9MB the canvas is a blank rectangle. This is the same
+ * master those splats were reconstructed from, 965KB, through the same cover-crop, so it
+ * lands in register with what replaces it: the handover reads as the picture gaining depth,
+ * not as a page finally loading. It doubles as the no-WebGL2 fallback, which is what it was
+ * built for originally. */
 .room__still {
+  /* **Absolute, and it matters now.** These two used to be a ternary — canvas or image,
+   * never both — so the image could sit in flow. It now sits *over* a live canvas while
+   * the rasters download, and left in flow it would stack below it and make the room two
+   * viewports tall. */
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
+  /* Warms up as it loads. `--load` is real bytes, written from the fetch (Room.tsx), and
+   * the room coming up to full brightness is the same gesture as a light being switched on
+   * — which is the room's own language, and costs nothing but a filter that is thrown away
+   * when the poster is. Never fully dark: at zero it is a dim room, not an absent one. */
+  filter: brightness(calc(0.72 + var(--load, 0) * 0.28)) saturate(calc(0.8 + var(--load, 0) * 0.2));
+  transition: opacity 700ms cubic-bezier(0.33, 0, 0.2, 1), filter 400ms linear;
 }
+
+/* The handover. Duration must stay in step with POSTER_FADE_MS in Room.tsx, which is how
+ * long the element remains mounted after this begins. */
+.room__still--gone {
+  opacity: 0;
+  /* Nothing left to warm: the canvas underneath is the real thing, at full strength, and
+   * fading a filtered copy over it would read as a brightness pop at the seam. */
+  filter: none;
+}
+
+/* A line of light along the floor of the frame. Not a spinner: a spinner says "an
+ * application is busy", and this is a room turning on. It is wordless on purpose — the
+ * document below is already there and already readable, so nothing here is blocking. */
+.room__load {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  /* Real bytes. The one thing this must never do is animate on a guessed timeline and then
+   * sit at 90% waiting, which is the failure mode of every fake progress bar. */
+  width: calc(var(--load, 0) * 100%);
+  /* `--room-amber` is the token for "the practicals: lamp, fairy lights, monitor spill" —
+   * the room's own light sources. Not an `--accent-*`: those belong one-to-one to
+   * destinations and are lit by focus states (tokens.css), and loading is not a
+   * destination. Borrowing one here would quietly make it the site's identity colour,
+   * which PLAN.md rules out. */
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--room-amber) 25%, transparent),
+    var(--room-amber)
+  );
+  box-shadow: 0 0 12px 1px color-mix(in srgb, var(--room-amber) 45%, transparent);
+  /* Follows the bytes closely, but not so exactly that a burst of chunks looks like a
+   * stutter. Short enough that a stalled network still reads as stalled. */
+  transition: width 220ms ease-out, opacity 400ms ease;
+}
+
+/* The poster is fading; the bar has nothing left to say. Goes first, so the last thing on
+ * screen is the room and not a full-width line under it. */
+.room__still--gone ~ .room__load { opacity: 0; }
 
 /* Once a focus panel is fully open (not mid-push/pull, when the canvas still has to draw),
  * the room is not just paused (roomRenderer.stop() above), it is taken out of the paint tree
@@ -119,6 +183,175 @@
  * `visibility: hidden` rather than removing the element: no reflow, and it costs nothing to
  * flip back the instant `leave()` calls `renderer.start()` again. */
 .room--live .room__canvas { visibility: hidden; }
+
+/* ---- ambient light -------------------------------------------------------
+ * Motion the room can carry without deforming geometry.
+ *
+ * The scene is one static Gaussian reconstruction, so nothing painted in it can be made to
+ * move. Light can: it is an overlay, which is what the DOM is good at, and the hotspot
+ * wakes below already prove an overlay composites correctly over the canvas.
+ *
+ * Everything here is CSS keyframes on a compositor layer. There is no per-frame
+ * JavaScript, which is why data/ambient.ts can argue this out of the one-live-element rule
+ * rather than registering with the stage. A hidden tab stops compositing on its own, so
+ * the `document.hidden` half of rule 1 is the browser's to keep, not ours.
+ *
+ * **Steam is `screen`-blended because its backdrop can afford it.** `screen` adds light,
+ * so it only shows where there is headroom left to add to — the monitor's dark panel has
+ * nothing but headroom, the lit lamp beside it has none. That is the same finding
+ * `.hotspot__light` records below, and it is why the column is positioned onto the panel
+ * rather than centred on the mug. See data/ambient.ts for the effect this cost us. */
+
+.ambient {
+  position: absolute;
+  inset: 0;
+  /* Decoration only. Every affordance in the room is a real button in the layer above. */
+  pointer-events: none;
+}
+
+/* Gone for the whole gesture, and it takes **two gates** to say that, because neither
+ * signal covers both ends.
+ *
+ * These are screen-space overlays pinned to rest-position rects, so they must not be
+ * visible over art that is moving — the same reason `.hotspot__light` cuts out.
+ *
+ *   `.room--busy`   is React state, so it lands the moment you click, before the camera
+ *                   has moved. But it is dropped at `closeMs` (200ms), because that is
+ *                   when the panel is gone and the hotspots have to be live again.
+ *   `[data-transit]` is written from the rAF whenever the rig's progress is above zero, so
+ *                   it covers the other 550ms — the retreat runs for `releaseMs` (750ms)
+ *                   after the panel clears, deliberately, so that the pull-back happens in
+ *                   the open where it can be watched (transition.ts). It is one frame late
+ *                   at the start, which is exactly the gap `.room--busy` covers.
+ *
+ * Together: hidden from the click until the camera is genuinely home. Gating on either one
+ * alone puts steam back on screen while the room is still sliding underneath it.
+ *
+ * **It fades rather than cuts, and it has to fade with `filter`, not `opacity`.** The
+ * hotspot lights cut out in one frame because they are pinned to a rect the camera is
+ * already leaving, so any ease would be spent sitting over art that has moved on. Steam is
+ * not an affordance and does not have that problem — it is a soft blur with no edge to come
+ * unglued — so it can afford to leave and return gently, which is the only part of this
+ * anyone actually watches.
+ *
+ * But `opacity` cannot do it. Put on `.ambient`, it makes the layer an isolated group and
+ * the wisps' `screen` blend flattens for the whole fade — a wash of flat cream appearing
+ * and vanishing, which is worse than the cut it replaces. That is the trap `.hotspot__wake`
+ * documents, met from the other side. `filter: opacity()` on the wisp *itself* is fine:
+ * a filter is applied to an element before it is blended, and it is ancestors, never the
+ * element, that isolate. It also leaves the `opacity` property free for the keyframes,
+ * which are already animating it. */
+.room--busy .ambient__wisp,
+.room[data-transit] .ambient__wisp {
+  filter: opacity(0);
+  transition-duration: 320ms;
+}
+
+/* Only once the panel is fully open — and the room has stopped drawing at all — is there
+ * any point stopping the wisps. Pausing them at the *start* of the gesture would freeze
+ * five smudges mid-flight and then fade them out, which is a still image dissolving rather
+ * than steam leaving. By here nothing is visible and nothing needs to be. */
+.room--live .ambient { visibility: hidden; }
+.room--live .ambient * { animation-play-state: paused; }
+
+/* A bare positioning wrapper — no opacity, no filter, no transform. See `.hotspot__wake`. */
+.ambient__fx { position: absolute; }
+
+/* ---- the mug's steam ----
+ *
+ * **What makes this read as steam rather than as rising blobs.** The first version was
+ * three identical soft ellipses translating up and scaling uniformly, and it read as
+ * exactly that. Four things were wrong, and none of them is opacity:
+ *
+ *   - A single radial gradient is an *ellipse*, and nothing in a rising plume is elliptical.
+ *     Each wisp is three offset gradients now, so its outline is lumpy and asymmetric.
+ *   - Real steam shears as it rises — it does not keep its shape. Hence the rotation, and
+ *     the scale that widens faster than it grows tall.
+ *   - It starts *narrow*. A plume leaving a mug is nearly the width of the rim and spreads
+ *     from there; starting wide is what made the old one read as a puff of cloud.
+ *   - Three copies of one keyframe look like three copies of one keyframe. Five wisps
+ *     across two mirrored keyframe sets, at five periods, is enough that the eye stops
+ *     finding the repeat.
+ */
+
+.ambient__wisp {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  width: 58%;
+  height: 30%;
+  margin-left: -29%;
+  /* Three offset lobes rather than one ellipse, all soft to nothing at their edges. A wisp
+   * with any edge at all reads as a shape rather than as air — the same failure, at a
+   * smaller scale, as the sliding rectangle the prism effect died of. */
+  background:
+    radial-gradient(closest-side at 38% 64%, rgba(255, 252, 246, 0.46), transparent 78%),
+    radial-gradient(closest-side at 64% 42%, rgba(255, 250, 242, 0.34), transparent 74%),
+    radial-gradient(closest-side at 50% 26%, rgba(255, 248, 238, 0.22), transparent 82%);
+  mix-blend-mode: screen;
+  opacity: 0;
+  will-change: transform, opacity, filter;
+  contain: paint;
+  animation: steam-rise 9s linear infinite;
+  /* The resting end of the fade the gate above drives. `filter`, not `opacity`, because
+   * the keyframes own `opacity` and because fading a blended element from an ancestor
+   * flattens the blend — see the gate. Returning (620ms) is slower than leaving (320ms):
+   * the steam arrives with the room over the pull-back, and is gone early on the way in. */
+  filter: opacity(1);
+  transition: filter 620ms cubic-bezier(0.33, 0, 0.2, 1);
+}
+
+/* Two drifts that genuinely mirror each other, so the plume wanders and its *mean* stays
+ * over the mug. They used to both end up well left — combined with a column that was also
+ * biased left, the plume read as rising beside the cup instead of out of it. Drift is part
+ * of where the effect sits, not a separate dial from the rect (see data/ambient.ts). */
+@keyframes steam-rise {
+  0% { opacity: 0; transform: translate(0, 16%) scale(0.30, 0.34) rotate(-8deg); }
+  16% { opacity: 0.5; }
+  55% { opacity: 0.34; transform: translate(-9%, -108%) scale(0.85, 0.72) rotate(7deg); }
+  100% { opacity: 0; transform: translate(-16%, -205%) scale(1.65, 1.1) rotate(19deg); }
+}
+
+@keyframes steam-rise-alt {
+  0% { opacity: 0; transform: translate(0, 16%) scale(0.26, 0.32) rotate(9deg); }
+  18% { opacity: 0.44; }
+  58% { opacity: 0.3; transform: translate(10%, -104%) scale(0.8, 0.7) rotate(-6deg); }
+  100% { opacity: 0; transform: translate(16%, -212%) scale(1.5, 1.15) rotate(-17deg); }
+}
+
+/* Periods with no common multiple worth noticing, and negative delays so the plume is
+ * mid-flight on the first frame. The differences in width and offset are what stop five
+ * wisps reading as five copies of two keyframes. */
+.ambient__wisp--b {
+  left: 47%;
+  width: 50%;
+  margin-left: -25%;
+  animation-name: steam-rise-alt;
+  animation-duration: 11.3s;
+  animation-delay: -4.2s;
+}
+.ambient__wisp--c {
+  left: 53%;
+  width: 44%;
+  margin-left: -22%;
+  animation-duration: 13.7s;
+  animation-delay: -8.1s;
+}
+.ambient__wisp--d {
+  left: 49%;
+  width: 38%;
+  margin-left: -19%;
+  animation-name: steam-rise-alt;
+  animation-duration: 7.9s;
+  animation-delay: -2.6s;
+}
+.ambient__wisp--e {
+  left: 52%;
+  width: 62%;
+  margin-left: -31%;
+  animation-duration: 16.1s;
+  animation-delay: -11.4s;
+}
 
 /* ---- hotspots ------------------------------------------------------------
  * The affordance is the object's own light, not an outline drawn around it. Three things
@@ -993,4 +1226,14 @@
   /* No introduction and no fade — but the wake is then the only thing saying the room is
    * interactive, so it appears at once instead of easing. */
   .hotspot__light { transition: none; }
+  /* The poster still covers the load — that is not decoration, it is the difference
+   * between a room and a blank rectangle — but it hands over in a cut, and Room.tsx
+   * unmounts it on the same zero-length schedule so the two cannot disagree. */
+  .room__still,
+  .room__load { transition: none; }
+  /* The ambient tier is motion by definition, so it does not run — and it does not linger
+   * either. Left in place with `animation: none` every wisp would freeze on its first
+   * keyframe, hanging a static smudge over the mug forever, which is worse than absent.
+   * The room without it is exactly the master. */
+  .ambient { display: none; }
 }

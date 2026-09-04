@@ -22,6 +22,7 @@ import { HOTSPOTS, hotspotById, type Hotspot } from '../data/hotspots';
 import { SCENE } from '../data/scene';
 import type { Project } from '../data/projects';
 import HotspotButton from './Hotspot';
+import Ambient from './Ambient';
 import MonitorFocus from './MonitorFocus';
 
 /** Which build's plates to load, and the numbers they were measured with. */
@@ -39,6 +40,16 @@ const ART_ASPECT = SCENE.width / SCENE.height;
 const COVER_MS = TRANSITION.pushMs + TRANSITION.takeoverMs;
 const UNCOVER_MS = TRANSITION.closeMs;
 
+/**
+ * How long the poster takes to hand over to the canvas, and therefore how long it stays
+ * mounted after the renderer is ready. Must match `.room__still`'s transition in room.css.
+ *
+ * Not in transition.ts, deliberately: that file is one *timeline*, whose whole value is
+ * that the camera, the panel and the two timers cannot disagree about a single gesture.
+ * This is a load event that happens at most once and shares no boundary with any of it.
+ */
+const POSTER_FADE_MS = 700;
+
 type Phase = 'idle' | 'entering' | 'live' | 'leaving';
 
 export default function Room() {
@@ -49,6 +60,13 @@ export default function Room() {
   const timerRef = useRef<number>(0);
 
   const [webgl, setWebgl] = useState(true);
+  /**
+   * Whether the renderer can actually draw. Distinct from `webgl`, which is about whether
+   * it ever will: between mount and here the splat build downloads 8.9MB across four
+   * rasters it needs *all* of before its first frame, and the canvas is blank for every
+   * millisecond of it. The poster covers that window.
+   */
+  const [drawable, setDrawable] = useState(false);
   const [aspect, setAspect] = useState(ART_ASPECT);
   const [view, setView] = useState({ w: 0, h: 0 });
   const [focus, setFocus] = useState<Hotspot | null>(null);
@@ -82,13 +100,43 @@ export default function Room() {
     let renderer: RoomRenderer | null = null;
     let rig: CameraRig | null = null;
 
+    // Whether the camera is anywhere other than home. Mirrored here rather than read back
+    // off the DOM, so the attribute below is written only when it actually changes.
+    let inTransit = false;
+
     // One rAF for the whole room. The rig writes the camera, and the push progress goes
     // out as a custom property rather than React state — this runs 60 times a second and
     // only ever changes how two things look.
+
     const onBeforeFrame = (dt: number) => {
       if (!rig || !renderer) return;
       rig.update(dt);
-      root.style.setProperty('--push', rig.progress().toFixed(3));
+      const push = rig.progress();
+      root.style.setProperty('--push', push.toFixed(3));
+
+      // **The ambient layer comes back when the camera is home, not when the panel clears.**
+      // Those are 550ms apart: `.room--busy` is dropped at `closeMs` (200ms), because that
+      // is when the panel is gone and the hotspots have to be live again, but the retreat
+      // runs for `releaseMs` (750ms) after that — deliberately, so the pull-back happens in
+      // the open where it can be watched (transition.ts). Steam reappearing in the middle
+      // of that is an overlay pinned to a rest-position rect being switched on over art
+      // that is still moving under it, which is exactly what `.room--busy` exists to
+      // prevent at the other end of the gesture.
+      //
+      // Taken from the rig rather than from a second timer: `t` is clamped to its target,
+      // so `progress()` reaches exactly 0 and this cannot drift out of step with
+      // `releaseMs` the way a hand-copied duration would.
+      //
+      // An *attribute*, not a class. `className` is a React-managed prop, so the re-render
+      // that sets `.room--busy` rewrites the whole attribute and would silently drop a
+      // class added from here — and since this only writes on change, it would never be
+      // put back. Nothing renders `data-transit`, so React leaves it alone, which is the
+      // same reason `--push` above survives.
+      const transit = push > 0;
+      if (transit !== inTransit) {
+        inTransit = transit;
+        root.toggleAttribute('data-transit', transit);
+      }
       // Keep the hotspots glued to their objects while the room parallaxes under them.
       // Two numbers for the whole layer; each hotspot scales them by its own 1/z in CSS.
       const k = parallaxCoeff(
@@ -104,7 +152,15 @@ export default function Room() {
     // Both renderers satisfy the same interface, so nothing below this line — the rig, the
     // stage manager, the hotspots — knows which build is mounted. See src/data/scene.ts.
     const created = SCENE.kind === 'splat'
-      ? createSplatRenderer({ canvas, assetPrefix: SCENE.assetPrefix!, onBeforeFrame })
+      ? createSplatRenderer({
+        canvas,
+        assetPrefix: SCENE.assetPrefix!,
+        onBeforeFrame,
+        // Straight onto the element as a custom property, not through React state. This
+        // fires once per network chunk — dozens of times over a few seconds — and all it
+        // ever does is set the width of one bar.
+        onProgress: (f) => root.style.setProperty('--load', f.toFixed(3)),
+      })
       : createRoomRenderer({
         canvas,
         layers: LAYERS,
@@ -125,6 +181,9 @@ export default function Room() {
         rigRef.current = rig;
         setAspect(r.imageAspect);
         r.start();
+        // Only now — after the rasters are decoded and uploaded, not when the last byte
+        // arrived — is there something on the canvas worth uncovering.
+        setDrawable(true);
       })
       .catch(() => { if (!disposed) setWebgl(false); });
 
@@ -266,6 +325,23 @@ export default function Room() {
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
+  // ---- the poster ----------------------------------------------------------
+  //
+  // The poster is the same master the splats were reconstructed from, at 965KB against
+  // their 8.9MB, drawn through the same cover-crop — so it is not a placeholder standing in
+  // for the room, it *is* the room, one frame flat. When the canvas takes over it does so
+  // in register, and what the visitor sees is the picture gaining depth rather than a page
+  // finally loading.
+  //
+  // Kept mounted through the fade and unmounted after, so a decoded full-frame image and
+  // its composited layer are not left behind for the whole session.
+  const [poster, setPoster] = useState(true);
+  useEffect(() => {
+    if (!drawable) return;
+    const t = window.setTimeout(() => setPoster(false), reduced ? 0 : POSTER_FADE_MS);
+    return () => clearTimeout(t);
+  }, [drawable, reduced]);
+
   // ---- at-rest parallax ----------------------------------------------------
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
@@ -289,8 +365,14 @@ export default function Room() {
   }, [view, aspect]);
 
   const busy = phase !== 'idle';
-  /** No push to trail, and nothing for the takeover to grow out of but the art as it is. */
-  const noCamera = reduced || !webgl;
+  /**
+   * No push to trail, and nothing for the takeover to grow out of but the art as it is.
+   *
+   * `!drawable` belongs here too: a hotspot clicked while the poster is still up has no rig
+   * to move (`enter` already cuts in that case), so growing the panel out of the rect the
+   * screen *would have* reached is a rectangle appearing out of nowhere.
+   */
+  const noCamera = reduced || !webgl || !drawable;
 
   return (
     <div
@@ -302,9 +384,30 @@ export default function Room() {
       style={TRANSITION_VARS as React.CSSProperties}
       onPointerMove={onPointerMove}
     >
-      {webgl
-        ? <canvas ref={canvasRef} className="room__canvas" aria-hidden="true" />
-        : <img className="room__canvas room__still" src={STILL} alt="" aria-hidden="true" />}
+      {webgl && <canvas ref={canvasRef} className="room__canvas" aria-hidden="true" />}
+
+      {/* On top of the canvas until there is something on it, and the *only* thing there is
+          when WebGL2 is missing — `drawable` never becomes true on that path, so this never
+          fades and the still fallback is unchanged. Degrade explicitly, never silently. */}
+      {poster && (
+        <img
+          className={`room__canvas room__still ${drawable ? 'room__still--gone' : ''}`}
+          src={STILL}
+          alt=""
+          aria-hidden="true"
+          fetchPriority="high"
+        />
+      )}
+
+      {/* Wordless, and gone the moment it is not needed. The room's own language is warm
+          light, not chrome — so this is a line of light along the floor of the frame rather
+          than a spinner, and it is driven by real bytes (`--load`), never by a timeline
+          guessing at how long a network takes. */}
+      {poster && webgl && <div className="room__load" aria-hidden="true" />}
+
+      {/* Scenery, below the hotspot layer in source order because the affordance must
+          always win: a wake and a focus ring draw over ambient light, never under it. */}
+      <Ambient view={view} aspect={aspect} />
 
       {/* The hotspots duplicate links that already exist in the document below, so the
           layer is hidden from assistive tech rather than announced twice. The links

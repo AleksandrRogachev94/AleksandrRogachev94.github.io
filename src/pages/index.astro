@@ -2,6 +2,7 @@
 import '../styles/tokens.css';
 import '../styles/room.css';
 import Room from '../components/Room.tsx';
+import { SCENE } from '../data/scene';
 
 // The room is one screenful at the top of a real page — it is not a replacement for the
 // document and never hides it. Scroll past the room and the prose below is the same
@@ -18,6 +19,17 @@ const description = 'Software, computer vision, and things built indoors.';
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    {/*
+      The room's poster, requested during HTML parse instead of after hydration.
+
+      Room.tsx renders this image, but Room.tsx is a `client:load` island — so without this
+      the browser cannot even *ask* for the poster until the React bundle has downloaded,
+      parsed and mounted. That is the whole window the poster exists to fill. Preloading it
+      here costs one line and moves the first paint of the room to roughly first paint of
+      the page. The 8.9MB of splats behind it are deliberately not preloaded: they must not
+      compete with this for bandwidth.
+    */}
+    <link rel="preload" as="image" href={SCENE.still} fetchpriority="high" />
     <title>{title}</title>
     <meta name="description" content={description} />
   </head>

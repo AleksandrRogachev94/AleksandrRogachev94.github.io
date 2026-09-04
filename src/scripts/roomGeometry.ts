@@ -97,6 +97,21 @@ export function imagePointToWorld(
 }
 
 /**
+ * An authored `disparity` as the reciprocal depth that `parallaxCoeff` multiplies against.
+ *
+ * Every screen-space overlay glued to the room needs this exact number and no other part
+ * of the world: the hotspot layer, and the ambient layer that sits beside it. It was
+ * inlined in both until the second one existed, at which point two copies of one formula
+ * were two chances for the layers to disagree about where a thing is.
+ */
+export function reciprocalDepth(
+  disparity: number,
+  opts: { nearZ: number; farZ: number },
+): number {
+  return 1 / opts.farZ + (1 / opts.nearZ - 1 / opts.farZ) * disparity;
+}
+
+/**
  * How far the room slides under a screen-space overlay when the camera translates.
  *
  * Hotspot rects are authored against the master and placed by `imageRectToScreen`, which

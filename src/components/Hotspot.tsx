@@ -52,7 +52,7 @@
 import { useRef, type CSSProperties } from 'react';
 import type { Hotspot } from '../data/hotspots';
 import { SCENE } from '../data/scene';
-import { imageRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
+import { imageRectToScreen, reciprocalDepth, type ScreenRect } from '../scripts/roomGeometry';
 
 interface Props {
   hotspot: Hotspot;
@@ -77,7 +77,7 @@ export default function HotspotButton({ hotspot, box, view, aspect, onActivate }
   // reciprocal depth happens here, in `left`/`top` rather than a transform — a transform
   // would make this a stacking context and `.hotspot__light`'s `screen` blend would stop
   // mixing with the canvas, which is the trap the comment above `.hotspot__wake` records.
-  const invZ = 1 / SCENE.farZ + (1 / SCENE.nearZ - 1 / SCENE.farZ) * hotspot.disparity;
+  const invZ = reciprocalDepth(hotspot.disparity, SCENE);
   const style = {
     left: `calc(${box.left}px + var(--par-x, 0) * ${invZ.toFixed(4)} * 1px)`,
     top: `calc(${box.top}px + var(--par-y, 0) * ${invZ.toFixed(4)} * 1px)`,
