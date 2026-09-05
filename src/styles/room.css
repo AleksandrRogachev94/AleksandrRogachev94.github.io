@@ -854,16 +854,26 @@
  * gone too: a display resolving as it wakes is a display cue.
  *
  * Each destination gets its own verb. You sit down at the monitor; you look through the
- * window. That is what makes the room a place rather than a menu with good art. */
+ * window. That is what makes the room a place rather than a menu with good art.
+ *
+ * **The rover joins the cut rather than getting a third verb, for now.** Its destination is
+ * a placeholder (RoverFocus.tsx), and the one thing this file has learned the hard way is
+ * that the verb follows the destination — the window's arrival could not be fixed while the
+ * destination was still a picture of a dashboard. So the rover takes the grammar that
+ * claims the least: the takeover would say the rover is a screen, and the cut says only
+ * that the room fell away. When the real map lands, this grouping is the thing to revisit,
+ * not to preserve. */
 
-.focus--feed {
+.focus--feed,
+.focus--rover {
   /* **No held beat.** There was one — `--black-pause-ms`, borrowed from the bench — and it
    * was the bug: the camera stopped, the frame held black, and then a bright picture
    * appeared. Stop, pause, flash; three events where there should be one motion. The bench
    * can afford that pause because it is a machine powering on and the pause is part of the
    * fiction. Nothing is powering on here.
    *
-   * The words follow the picture by a beat, which is the only stagger left. */
+   * The words follow the picture by a beat, which is the only stagger left — and on the
+   * rover, where there is no picture yet, they follow the black by the same beat. */
   --t1: calc(var(--t0) + 320ms);
 }
 
@@ -873,12 +883,14 @@
  * `.focus--closing` rules on specificity rather than on source order. */
 @keyframes feed-cut { from { opacity: 0; } to { opacity: 1; } }
 
-.focus--feed.focus--open { animation: feed-cut 1ms linear var(--t0) both; }
+.focus--feed.focus--open,
+.focus--rover.focus--open { animation: feed-cut 1ms linear var(--t0) both; }
 
 /* Leaving is a dissolve back to the room over the same `--close-ms` the bench collapses in.
  * Not a second hard cut: arriving somewhere is a switch, but leaving is a retreat, and the
  * camera is already pulling back underneath this (Room.tsx). */
-.focus--feed.focus--closing { animation: feed-cut var(--close-ms) linear 0ms reverse both; }
+.focus--feed.focus--closing,
+.focus--rover.focus--closing { animation: feed-cut var(--close-ms) linear 0ms reverse both; }
 
 /* An animation, not a transition: the panel is mounted already carrying its open class, so
  * a transition would have no start value to move from and would simply snap.
@@ -1760,6 +1772,65 @@
   to   { opacity: 1; transform: none; }
 }
 
+/* ---- the rover: RoboTrail (placeholder) ------------------------------------
+ * Forty lines, on purpose. The approach is real and tuned (hotspots.ts); the destination is
+ * not built yet, so this is the least CSS that can hold real words without pretending to be
+ * finished. `rm` the block and the component together when the map arrives.
+ *
+ * **It borrows the window's typographic pieces** — `.field__bar`, `.field__eyebrow`,
+ * `.field__h`, `.field__lede`, `.field__rail`, `.field__links` — which are already plain
+ * classes rather than descendants of `.field`, and were already shared with the bench in
+ * two places (`.field__dot`, `.deck__spacer`). Rule 4 wants one dark palette across every
+ * focus state, and re-declaring the same type scale under a second prefix is how two
+ * palettes quietly become two. What is *not* borrowed is `.field__read`, because that one
+ * is genuinely the window's: it is pinned low-left into the scrim's deepest corner so the
+ * column sits where the picture is quiet. There is no picture here.
+ *
+ * When the real destination lands, whichever of those pieces it still uses should move out
+ * of the `field__` prefix into a shared one. Doing that now would be renaming CSS to suit a
+ * placeholder. */
+
+/* A flex column, not an overlay. `.field__read` gets to be `position: absolute` because it
+ * is pinned into a corner of a photograph and nothing is under it; here an absolute layer
+ * with `inset: 0` would sit on top of the bar and swallow the back button's clicks — a
+ * panel whose only exit is Esc. The bar takes its height, the column takes the rest. */
+.bay {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Centred, not pinned. The window's column hides in a corner of a picture; this panel has
+ * nothing behind it, so the words are the whole frame and belong in the middle of it.
+ * Capped in `ch` rather than px so it stays a readable measure at any viewport.
+ *
+ * `safe center`, matching `.deck__body`: on a viewport too short for the content, true
+ * centring clips the top instead of scrolling to it. */
+.bay__read {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  width: min(52ch, 84vw);
+  margin: 0 auto;
+  padding: 0 clamp(16px, 3.5vw, 40px) clamp(24px, 6vh, 72px);
+  overflow-y: auto;
+
+  /* The same single stagger the window uses: the words follow the cut by a beat, and here
+   * there is only one thing to stagger. `--t1` is `--t0 + 320ms`, from the shared
+   * `.focus--rover` rule above. */
+  animation: field-in 460ms var(--ease-camera) calc(var(--t1) + 110ms) both;
+}
+
+/* The admission. Deliberately quiet — soft ink, no accent, no border: it is a note about
+ * the site's state, not a status the machine is reporting about itself. */
+.bay__note {
+  margin: 0 0 20px;
+  font: 11px/1.6 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--focus-ink-soft);
+}
+
 /* Narrow: the column goes under the subject rather than beside it, and the view crops to
  * the bird instead of the rail. */
 @media (max-width: 760px) {
@@ -1777,8 +1848,10 @@
   .focus--open { animation: none; }
   /* Two classes deep, so these need naming: a media query adds no specificity, and the
    * window's own rules would otherwise outrank the two above and keep animating. */
-  .focus--feed.focus--open { animation: none; }
-  .focus--feed.focus--closing { animation-duration: 0ms; }
+  .focus--feed.focus--open,
+  .focus--rover.focus--open { animation: none; }
+  .focus--feed.focus--closing,
+  .focus--rover.focus--closing { animation-duration: 0ms; }
   /* Still needs to leave, just without the 300ms. Zero duration keeps the class contract
    * identical so Room.tsx has no reduced-motion branch of its own to keep in step. */
   .focus--closing { animation-duration: 0ms; }
@@ -1794,6 +1867,7 @@
    * them the panel is simply there, which is what reduced motion asks for. */
   .field__bar,
   .field__read,
+  .bay__read,
   .field__view { animation: none; }
   /* The exposure is the animation, so with it gone the view must be left somewhere sane —
    * otherwise `both` holds the opening keyframe and the arrival is a dim, blurred photograph

@@ -29,6 +29,7 @@ import { useLastInput } from './useLastInput';
 import Ambient from './Ambient';
 import MonitorFocus from './MonitorFocus';
 import WindowFocus from './WindowFocus';
+import RoverFocus from './RoverFocus';
 
 /** Which build's plates to load, and the numbers they were measured with. */
 const LAYERS = SCENE.layers ?? [];
@@ -48,14 +49,15 @@ const UNCOVER_MS = TRANSITION.closeMs;
 /**
  * **When a cut destination cuts — and it is before the camera stops, deliberately.**
  *
- * The window's veil is finished at push 0.70 (hotspots.ts): from there to the end of the
- * approach the room is 12% brightness under 9px of blur, so the last third of the push is a
- * dark smear with nothing in it. And that is exactly the stretch in which the camera
- * decelerates. The ease keeps a linear tail so the *monitor* is still gaining apparent size
- * at the handoff — at travel 0.84 the magnification's hyperbolic gain outruns the slowdown,
- * 1.56x the average rate. At the feeder's travel 0.55 it does not: the same tail leaves the
- * apparent zoom at 0.56x its average, so the push visibly glides to a halt and then a second
- * thing starts moving. That is the "decelerates, stops, then the screen expands" this fixes.
+ * A cut fires on its destination's own `veil.full` — 0.70 for the window, 0.80 for the rover
+ * (hotspots.ts). From there to the end of the approach the room is 12% brightness under 9px of
+ * blur, so the tail of the push is a dark smear with nothing in it. And that is exactly the
+ * stretch in which the camera decelerates. The ease keeps a linear tail so the *monitor* is
+ * still gaining apparent size at the handoff — at travel 0.84 the magnification's hyperbolic
+ * gain outruns the slowdown, 1.56x the average rate. At the feeder's travel 0.55 it does not:
+ * the same tail leaves the apparent zoom at 0.56x its average, so the push visibly glides to a
+ * halt and then a second thing starts moving. That is the "decelerates, stops, then the screen
+ * expands" this fixes.
  *
  * So the cut happens the moment the room has finished disappearing. The camera is still
  * moving at speed underneath, and its stop is never seen by anyone. Converted out of push
@@ -73,24 +75,36 @@ const cutMsFor = (h: Hotspot) =>
   TRANSITION.pushMs * pushTimeFor((h.veil ?? DEFAULT_VEIL).full);
 
 /**
+ * Whether this destination arrives by cutting rather than by expanding a panel out of the
+ * object's own rectangle.
+ *
+ * **Stated as "not the bench" rather than as a list of the cutters**, because that is the
+ * shape of the actual rule: `takeover` asserts that the object *becomes* the viewport, and
+ * the monitor is the only thing in the room for which that is true (room.css, "the cut").
+ * Written this way, a new destination gets the claim-nothing grammar by default and has to
+ * opt in to the screen one, which is the right way round — the feeder inheriting the
+ * monitor's grammar by accident is the bug this encodes against.
+ */
+const cuts = (h: Hotspot) => h.focusState !== 'bench';
+
+/**
  * When this destination's panel is opaque, and therefore when the room can stop drawing.
  *
- * Not one number any more, because the two focus states cover the frame by different means.
- * The bench *expands* out of the monitor's rectangle, so it is not opaque until the clip has
- * finished sweeping — `pushMs + takeoverMs`. The window **cuts**, and cuts early, so the
- * frame is covered well before the camera would have arrived. Using the bench's number there
- * would leave the room drawing (and visibly artifacting) underneath a panel already opaque
- * over it.
+ * Not one number, because the focus states cover the frame by different means. The bench
+ * *expands* out of the monitor's rectangle, so it is not opaque until the clip has finished
+ * sweeping — `pushMs + takeoverMs`. A cut is opaque the instant it fires, which is well
+ * before the camera would have arrived. Using the bench's number for a cut would leave the
+ * room drawing (and visibly artifacting) underneath a panel already opaque over it.
  *
  * The camera being frozen mid-push by the `stop()` this schedules is intended: nothing is
  * looking at it, and the retreat simply starts from where it got to.
  */
 const coverMsFor = (h: Hotspot) =>
-  // One frame's grace on the window's cut. `setPhase('live')` hides the canvas, and the
-  // panel that has to be covering it by then goes opaque from a CSS animation on the same
-  // instant — two clocks, one of which is React's. If the timer lands first the room is a
-  // frame of bare `--room-bg`, which is warm paper, in the middle of a fade to black.
-  h.focusState === 'window' ? cutMsFor(h) + 80 : COVER_MS;
+  // One frame's grace on a cut. `setPhase('live')` hides the canvas, and the panel that has
+  // to be covering it by then goes opaque from a CSS animation on the same instant — two
+  // clocks, one of which is React's. If the timer lands first the room is a frame of bare
+  // `--room-bg`, which is warm paper, in the middle of a fade to black.
+  cuts(h) ? cutMsFor(h) + 80 : COVER_MS;
 
 /**
  * How long the poster takes to hand over to the canvas, and therefore how long it stays
@@ -570,16 +584,19 @@ export default function Room() {
       </div>
 
       {focus && (() => {
-        // One branch per `focusState`, and they no longer share a props shape — which is the
-        // honest outcome, not a wart. The two destinations arrive by different mechanisms
-        // (see "the cut" in room.css), so pretending they take the same inputs is what let
-        // the feeder inherit the monitor's grammar in the first place.
+        // One branch per `focusState`, and they do not share a props shape — which is the
+        // honest outcome, not a wart. The destinations arrive by different mechanisms (see
+        // "the cut" in room.css), so pretending they take the same inputs is what let the
+        // feeder inherit the monitor's grammar in the first place.
         const open = phase !== 'leaving';
 
-        // **The window takes no rectangle**, and that is the whole difference. The bench's
-        // panel is a clip that starts as the monitor's own rect and pushes its edges off the
-        // frame — it needs to know where the screen got to. The window cuts to the feeder's
-        // camera instead, so there is nothing to grow out of and nothing to measure.
+        // **Neither cut destination takes a rectangle**, and that is the whole difference.
+        // The bench's panel is a clip that starts as the monitor's own rect and pushes its
+        // edges off the frame — it needs to know where the screen got to. A cut replaces the
+        // frame outright, so there is nothing to grow out of and nothing to measure. The two
+        // still get their own components rather than one parameterised panel: they cut by
+        // the same mechanism but they are not the same destination, and the rover's is a
+        // placeholder that should be easy to throw away (RoverFocus.tsx).
         if (focus.focusState === 'window') {
           return (
             <WindowFocus
@@ -589,6 +606,18 @@ export default function Room() {
               // to trail (reduced motion, no WebGL, poster still up) — which is why this
               // replaced a `cut` boolean plus a `.focus--cut` class that only ever set the
               // same number in CSS.
+              atMs={noCamera ? 0 : cutMsFor(focus)}
+              lastInputRef={lastInputRef}
+              onExit={requestExit}
+            />
+          );
+        }
+
+        if (focus.focusState === 'rover') {
+          return (
+            <RoverFocus
+              hotspot={focus}
+              open={open}
               atMs={noCamera ? 0 : cutMsFor(focus)}
               lastInputRef={lastInputRef}
               onExit={requestExit}

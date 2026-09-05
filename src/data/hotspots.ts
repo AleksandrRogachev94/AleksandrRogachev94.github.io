@@ -107,8 +107,9 @@ export interface Hotspot {
    * same decision**, which is why one being wrong made the other look wrong too.
    *
    * Optional: unset falls back to the monitor's curve (`DEFAULT_VEIL` in Room.tsx — the
-   * stylesheet only declares `--veil-t: 0` and does no scheduling of its own). The rover
-   * leaves it unset deliberately rather than carrying a number nothing exercises yet.
+   * stylesheet only declares `--veil-t: 0` and does no scheduling of its own). Every
+   * destination that has been built now authors one; the fallback exists for the ones that
+   * have not.
    */
   veil?: { start: number; full: number };
   /**
@@ -120,8 +121,13 @@ export interface Hotspot {
    * clickable *yet* is exactly right. This is the same idea one layer up: the rects are
    * mapped for the whole room in one pass because that is one pass of work, and each one
    * lights up when its destination is built.
+   *
+   * **The value names a destination, not a transition.** Two of the three cut rather than
+   * expanding a panel out of their own rect, and Room.tsx works that out from `!== 'bench'`
+   * rather than from a flag here — the monitor is the only object in the room that really
+   * is a screen, so it is the exception and everything else is the rule.
    */
-  focusState?: 'bench' | 'window';
+  focusState?: 'bench' | 'window' | 'rover';
 }
 
 export const HOTSPOTS: readonly Hotspot[] = [
@@ -181,8 +187,21 @@ export const HOTSPOTS: readonly Hotspot[] = [
     // 0.75 of frame width. Filling it outright needs travel 0.89, which magnifies 9.1x
     // and puts one splat at ~19 screen px against the 9px veil room.css fades in: at
     // 0.105 of frame width the rover runs out of reconstruction before it runs out of
-    // frame. RoboTrail's focus state is a later increment; revisit then.
+    // frame. Unchanged now that the destination exists: the arrival is a cut, so nothing
+    // has to register against the art at the handoff and there is no reason to push
+    // further into a reconstruction that is already at its limit.
     travel: 0.86,
+    // Later than the feeder's 0.15, earlier than the monitor's 0.45, and both ends are the
+    // same fact: the rover is 3.18m away in open floor with the cleanest depth reading in
+    // the room (spread 0.002), so the first third of this push is the best parallax the
+    // reconstruction has to offer and dimming it early would be throwing away the argument
+    // for the whole renderer. It still has to be gone before the end, because 7.1x
+    // magnification puts one splat at ~15 screen px — so the veil finishes at 0.80 and the
+    // last fifth is a smear nobody reads.
+    veil: { start: 0.35, full: 0.80 },
+    // Cuts, like the window and unlike the bench. See RoverFocus.tsx for why a placeholder
+    // gets to borrow a verb but not invent one.
+    focusState: 'rover',
   },
   {
     id: 'monitor',
