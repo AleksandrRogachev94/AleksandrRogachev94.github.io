@@ -90,6 +90,28 @@ export interface Hotspot {
    */
   travel: number;
   /**
+   * When the room starts falling away on the approach, in `--push` units — `start` is where
+   * the veil begins, `full` is where it has reached its floor (~12% brightness, 9px blur).
+   *
+   * **This is per-object because the thing it hides is per-object.** The veil covers
+   * disocclusion and thinning reconstruction, and those arrive on a schedule set by
+   * magnification and by how much real geometry SHARP has for that surface. The monitor is
+   * a flat frontal panel 4.5m away that the reconstruction resolves well, so it can stay
+   * legible until 0.45 — and it *must*, because its panel appears inside the room and a
+   * seam matters. The feeder is 8.3m out, off-axis, and seen through glass; magnifying it
+   * finds black holes where SHARP has nothing, and it needs the room gone much earlier.
+   *
+   * The feeder can afford that because it cuts rather than expanding a panel out of itself
+   * (WindowFocus.tsx). Nothing has to survive the handoff for a cut, so there is no reason
+   * to keep the room readable up to it. **The arrival grammar and the veil schedule are the
+   * same decision**, which is why one being wrong made the other look wrong too.
+   *
+   * Optional: unset falls back to the monitor's curve (`DEFAULT_VEIL` in Room.tsx — the
+   * stylesheet only declares `--veil-t: 0` and does no scheduling of its own). The rover
+   * leaves it unset deliberately rather than carrying a number nothing exercises yet.
+   */
+  veil?: { start: number; full: number };
+  /**
    * Which focus state this hotspot opens, if one is built yet. A hotspot without one stays
    * an ordinary link to its own page — no camera move, no takeover.
    *
@@ -99,15 +121,18 @@ export interface Hotspot {
    * mapped for the whole room in one pass because that is one pass of work, and each one
    * lights up when its destination is built.
    */
-  focusState?: 'bench';
+  focusState?: 'bench' | 'window';
 }
 
 export const HOTSPOTS: readonly Hotspot[] = [
   {
     id: 'feeder',
     label: 'the bird feeder',
-    // Anchors into the real document rather than a page that does not exist yet.
-    href: '/#birdlense',
+    // A real page of its own now, not an anchor into the home document. Rule 2 wants every
+    // destination to have a URL that stands up on its own — crawlable, shareable, and the
+    // thing a visitor with JavaScript off or reduced motion on actually lands on. It got one
+    // the moment there was enough to say to fill a page.
+    href: '/birdlense',
     accent: 'var(--accent-birdlense)',
     // The feeder itself, not the window it is seen through. The old master had to map the
     // whole window because a monocular depth model reads glass as one flat plane and put
@@ -131,6 +156,15 @@ export const HOTSPOTS: readonly Hotspot[] = [
     // longer ray. BirdLense's focus state is a later increment and will want a close-
     // plate to carry the last stretch, as the ladder in docs/PROMPTS.md intends.
     travel: 0.55,
+    // Dark by 0.70, i.e. with 30% of the push still to run. Off-axis at 8.3m through glass
+    // is the worst case in the room for the reconstruction, and the last third of this
+    // approach is where the black holes open up. Nothing needs to be legible at the end of
+    // it: the arrival is a cut.
+    veil: { start: 0.15, full: 0.70 },
+    // The short push is why this focus state opens on the feeder's own camera rather than
+    // on a panel: at 0.55 the camera hands over a long way out, and a rectangle growing out
+    // of a bird feeder would be claiming the feeder is a screen. See WindowFocus.tsx.
+    focusState: 'window',
   },
   {
     id: 'robot',
@@ -152,7 +186,7 @@ export const HOTSPOTS: readonly Hotspot[] = [
   },
   {
     id: 'monitor',
-    label: 'the software bench',
+    label: 'the monitor',
     href: '/software',
     accent: 'var(--accent-flowlab)',
     // The ultrawide alone, not the pair. Framing both put the aim point in the *gap*
@@ -181,6 +215,12 @@ export const HOTSPOTS: readonly Hotspot[] = [
     // px on a 1600px viewport, against the 9px blur and 0.12 brightness room.css has
     // faded in by the end of the push. If that ever reads badly, this number is the dial.
     travel: 0.84,
+    // The values room.css has always used, stated here now that they are one object's
+    // answer rather than the room's. Late and gentle on purpose: the bench's panel appears
+    // *inside* this room and grows out of this rectangle, so the room has to still be a
+    // room at the handoff. The first half of the push is left completely unfiltered because
+    // the parallax is the whole argument for the reconstruction.
+    veil: { start: 0.45, full: 1.0 },
     focusState: 'bench',
   },
 ];

@@ -121,6 +121,55 @@ depth       p50 0.00  p99.9 0.14  max 0.18  m           (at 113m)
 scale       p50 0.9%  p99.9 1.9%  max 1.9%  relative
 ```
 
+## Adding a clickable object
+
+**Two files carry SAM prompts and only one of them is live.** This is the trap:
+
+| | file | masks | build |
+|---|---|---|---|
+| legacy | `art/objects.json` — 16 objects, "what hides what" | `art/build/masks/` | layered, superseded |
+| **live** | **`art/hotspots.json`** — "what can be clicked" | **`art/build/masks-hotspots/`** | splat |
+
+The splat build has no layers, nothing to inpaint and no plates to cut, so it never asks the
+occlusion question at all. `objects.json` and everything derived from it is dead — and worse
+than dead, because the masters were **regenerated at the same resolution** on 2026-09-03, so
+the stale masks have the right dimensions and the wrong pixels. They look registered and are
+not: `monitor-left` sits at `[0.7260, 0.4238, …]` against the shipped `[0.6434, 0.3981, …]`.
+Matching dimensions is not evidence. Check a bounding box against `src/data/hotspots.ts`.
+
+`rm -rf art/build/masks art/build/_layer*` costs nothing and removes the ambiguity.
+
+The run, for a hotspot or a room control alike — that file's question is "what can be
+clicked", and only what happens on the click differs:
+
+```
+tools/.venv/bin/python tools/pick.py \
+  --color art/room-day-summer.jpg --objects art/hotspots.json \
+  --mask-dir art/build/masks-hotspots
+# http://localhost:8765 -> "+ new" -> name it -> drag a box -> s
+
+tools/.venv/bin/python tools/wake.py --masks art/build/masks-hotspots --out-dir public/art \
+  --wake <name>=<name>          # prints rect and wakeRect
+  # small object? --feather 2. The spill is blur(feather * 6) in *output* px, an absolute
+  # radius, so the default is tuned for something the monitor's size. On the 40px speaker it
+  # came back peaking at alpha 0.67 against the monitor's 0.96 and no stylesheet can rescue
+  # that. Check the peak, not the printed size.
+
+tools/.venv/bin/python tools/splat_probe.py --prefix art/build/room-day-summer \
+  --at <cx>,<cy>                # disparity, and the spread that says whether to trust it
+```
+
+Then the entry goes in `src/data/hotspots.ts` (camera pushes in, needs `aim`, `travel`,
+`veil`, a focus state) or `src/data/controls.ts` (changes something in place, needs none of
+those, and needs a `ledRect` instead). Which one is the rule-5 decision and it is not
+reversible by adding a flag.
+
+**A control also needs a place to put its standby light, and that is a question about the
+art, not about the data.** It has to land on a surface that explains it — a face with an
+edge, a panel, a seam. A point light on a blank curved side reads as a blemish no matter
+where along it you slide it; the speaker's went to its top face for that reason, and the
+same test is why the feeder's ambient tell sits on the camera module actually painted there.
+
 ## Bugs found, and what they looked like
 
 All six were silent, and **five were data going through a picture pipeline** — the

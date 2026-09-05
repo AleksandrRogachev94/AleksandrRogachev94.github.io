@@ -52,10 +52,12 @@ const description = 'Software, computer vision, and things built indoors.';
       <section id="birdlense">
         <h2>BirdLense</h2>
         <p>
-          A smart bird feeder in the yard outside the window: YOLO and ByteTrack for
-          detection and tracking, BirdNET for the calls. It is a physical thing, so it has a
-          physical address in the room.
+          A smart bird feeder in the yard outside the window: a two-stage YOLO detector with
+          ByteTrack for tracking, BirdNET for the calls, and a Raspberry Pi doing all of it
+          without sending anything to the cloud. It is a physical thing, so it has a physical
+          address in the room.
         </p>
+        <p><a href="/birdlense">Look through the window →</a></p>
       </section>
 
       <section id="robotrail">
@@ -66,6 +68,23 @@ const description = 'Software, computer vision, and things built indoors.';
           physical thing, so it sits on the floor rather than on the monitor.
         </p>
       </section>
+
+      {/*
+        The colophon, and it is on this page only — deliberately. The loop plays in the room,
+        the room is here, and a credit on /software would be crediting a page that makes no
+        sound. It sits in the document rather than in the room for the same reason everything
+        else does: the room carries no lists and no chrome (rule 2), and a credit is text.
+
+        The Pixabay Content License does not require this. It is here because a portfolio that
+        quietly uses someone's work without naming them is making a claim about itself.
+      */}
+      <footer class="doc__colophon">
+        <p>
+          Music in the room:
+          <a href="https://pixabay.com/music/beats-sakura-meditate-beat-138298/">Sakura Meditate Beat</a>
+          by moodmode, under the Pixabay Content License.
+        </p>
+      </footer>
     </main>
 
     <style>
@@ -79,6 +98,14 @@ const description = 'Software, computer vision, and things built indoors.';
       .doc section { margin-top: 48px; }
       .doc h2 { font-size: 1.25rem; margin: 0 0 0.4em; }
       .doc a { color: var(--room-ink); text-underline-offset: 3px; }
+      .doc__colophon {
+        margin-top: 64px;
+        padding-top: 24px;
+        border-top: 1px solid var(--room-line);
+        color: var(--room-ink-soft);
+        font-size: 0.875rem;
+      }
+      .doc__colophon p { margin: 0; }
     </style>
   </body>
 </html>

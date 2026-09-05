@@ -99,6 +99,14 @@ def main() -> None:
     ap.add_argument("--width", type=int, default=1376,
                     help="the wake is soft light, so it costs nothing to ship it at a "
                          "quarter of the master and let the browser scale it up")
+    # **Scale this with the object, not the frame.** `build_wake`'s spill is
+    # `blur(feather * 6)` in output pixels — an absolute radius — so the default is
+    # tuned for something the monitor's size (217px wide at --width 1376). On the
+    # speaker, 40px wide, a 24px spill blur erases the shape: the wake came back
+    # peaking at alpha 0.67 with a mean of 0.11, against the monitor's 0.96/0.33, and
+    # no opacity in the stylesheet can rescue a mask that faint. --feather 2 puts it at
+    # 0.93/0.23, the same profile as the robot. Check the peak after baking anything
+    # small; the printed size is not enough to tell.
     ap.add_argument("--feather", type=int, default=4, help="fill softness, in output px")
     ap.add_argument("--quality", type=int, default=82)
     args = ap.parse_args()

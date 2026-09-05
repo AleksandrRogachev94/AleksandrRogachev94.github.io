@@ -13,12 +13,21 @@
  *
  * The layer is `aria-hidden`: it is decoration with no content and no affordance, and the
  * document below carries everything a screen reader needs (rule 2).
+ *
+ * **It is no longer only decoration, though, and that is worth being honest about.** The
+ * electronic tells (data/ambient.ts) are what tells a visitor which objects can be entered —
+ * on a touch device they are the *only* thing that does, because the hotspot wake answers to
+ * `:hover` and `:focus-visible` and a phone has neither. They stay `aria-hidden` regardless:
+ * a screen reader gets the real links, in the room and in the document below, and describing
+ * a blinking light to someone who cannot see it is noise, not information. The rule is that
+ * every channel carries the affordance in its own terms, not that every channel carries the
+ * same artifact.
  */
 
 import type { CSSProperties } from 'react';
 import { AMBIENT, type AmbientEffect } from '../data/ambient';
 import { SCENE } from '../data/scene';
-import { imageRectToScreen, reciprocalDepth } from '../scripts/roomGeometry';
+import { imageRectToScreen, pinToArt } from '../scripts/roomGeometry';
 
 interface Props {
   /** The room's size in CSS px, for the same cover-crop the renderer uses. */
@@ -29,19 +38,32 @@ interface Props {
 
 function Effect({ effect, view, aspect }: { effect: AmbientEffect } & Props) {
   const box = imageRectToScreen(effect.rect, view.w, view.h, aspect);
-  // Placed in `left`/`top` rather than a transform for the reason Hotspot.tsx records: a
-  // transform would make this a stacking context and the children's blending would stop
-  // mixing with the canvas, which turns light back into a flat decal.
-  const invZ = reciprocalDepth(effect.disparity, SCENE);
   const style = {
-    left: `calc(${box.left}px + var(--par-x, 0) * ${invZ.toFixed(4)} * 1px)`,
-    top: `calc(${box.top}px + var(--par-y, 0) * ${invZ.toFixed(4)} * 1px)`,
-    width: `${box.width}px`,
-    height: `${box.height}px`,
+    ...pinToArt(box, effect.disparity, SCENE),
+    ...(effect.accent ? { '--accent': effect.accent } : {}),
   } as CSSProperties;
 
+  // The id rides along as a class so one entry can carry its own cadence without earning a
+  // whole `kind` of its own: the feeder's camera and the rover's panel are the same effect
+  // at different rhythms, and two lights blinking in lockstep would read as one animation
+  // applied twice rather than as two machines.
+  const cls = `ambient__fx ambient__fx--${effect.kind} ambient__fx--${effect.id}`;
+
+  if (effect.kind === 'glow') {
+    return (
+      <div className={cls} style={style}>
+        {/* One soft bloom. It reaches well past its own rect — the visible light of an
+            indicator is much bigger than the indicator, and a screen's light lands on the
+            desk in front of it. How far, and how fast it pulses, is the id's business
+            (room.css); the markup is the same for a 30px LED and a 25-inch panel — and for
+            a room control's standby light, which wears the same class. */}
+        <span className="glow" />
+      </div>
+    );
+  }
+
   return (
-    <div className={`ambient__fx ambient__fx--${effect.kind}`} style={style}>
+    <div className={cls} style={style}>
       {/* Five wisps at five periods sharing no common multiple worth noticing, with
           negative delays so the plume is already mid-flight on the first frame rather than
           starting with a puff. Each carries its own shape and drift in CSS; three was too

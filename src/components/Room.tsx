@@ -15,15 +15,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoomRenderer, type RoomRenderer } from '../scripts/roomRenderer';
 import { createSplatRenderer } from '../scripts/splatRenderer';
-import { createCameraRig, type CameraRig } from '../scripts/cameraRig';
+import { createCameraRig, pushTimeFor, type CameraRig } from '../scripts/cameraRig';
 import { parallaxCoeff, imageRectToScreen, pushedRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
 import { TRANSITION, TRANSITION_VARS } from '../scripts/transition';
 import { HOTSPOTS, hotspotById, type Hotspot } from '../data/hotspots';
+import { CONTROLS } from '../data/controls';
 import { SCENE } from '../data/scene';
 import type { Project } from '../data/projects';
+import { createRoomAudio, type RoomAudio } from '../scripts/roomAudio';
 import HotspotButton from './Hotspot';
+import RoomControlButton from './RoomControl';
+import { useLastInput } from './useLastInput';
 import Ambient from './Ambient';
 import MonitorFocus from './MonitorFocus';
+import WindowFocus from './WindowFocus';
 
 /** Which build's plates to load, and the numbers they were measured with. */
 const LAYERS = SCENE.layers ?? [];
@@ -39,6 +44,53 @@ const ART_ASPECT = SCENE.width / SCENE.height;
  */
 const COVER_MS = TRANSITION.pushMs + TRANSITION.takeoverMs;
 const UNCOVER_MS = TRANSITION.closeMs;
+
+/**
+ * **When a cut destination cuts — and it is before the camera stops, deliberately.**
+ *
+ * The window's veil is finished at push 0.70 (hotspots.ts): from there to the end of the
+ * approach the room is 12% brightness under 9px of blur, so the last third of the push is a
+ * dark smear with nothing in it. And that is exactly the stretch in which the camera
+ * decelerates. The ease keeps a linear tail so the *monitor* is still gaining apparent size
+ * at the handoff — at travel 0.84 the magnification's hyperbolic gain outruns the slowdown,
+ * 1.56x the average rate. At the feeder's travel 0.55 it does not: the same tail leaves the
+ * apparent zoom at 0.56x its average, so the push visibly glides to a halt and then a second
+ * thing starts moving. That is the "decelerates, stops, then the screen expands" this fixes.
+ *
+ * So the cut happens the moment the room has finished disappearing. The camera is still
+ * moving at speed underneath, and its stop is never seen by anyone. Converted out of push
+ * units into wall-clock by `pushTimeFor`, because `progress()` is eased and 0.70 of the push
+ * is not 0.70 of the duration.
+ */
+/**
+ * The curve for a destination that has not authored one — the monitor's, which is the curve
+ * the whole room used before the schedule became per-object. Named once because three places
+ * need it and three copies of a default is how a default quietly becomes two defaults.
+ */
+const DEFAULT_VEIL = { start: 0.45, full: 1 };
+
+const cutMsFor = (h: Hotspot) =>
+  TRANSITION.pushMs * pushTimeFor((h.veil ?? DEFAULT_VEIL).full);
+
+/**
+ * When this destination's panel is opaque, and therefore when the room can stop drawing.
+ *
+ * Not one number any more, because the two focus states cover the frame by different means.
+ * The bench *expands* out of the monitor's rectangle, so it is not opaque until the clip has
+ * finished sweeping — `pushMs + takeoverMs`. The window **cuts**, and cuts early, so the
+ * frame is covered well before the camera would have arrived. Using the bench's number there
+ * would leave the room drawing (and visibly artifacting) underneath a panel already opaque
+ * over it.
+ *
+ * The camera being frozen mid-push by the `stop()` this schedules is intended: nothing is
+ * looking at it, and the retreat simply starts from where it got to.
+ */
+const coverMsFor = (h: Hotspot) =>
+  // One frame's grace on the window's cut. `setPhase('live')` hides the canvas, and the
+  // panel that has to be covering it by then goes opaque from a CSS animation on the same
+  // instant — two clocks, one of which is React's. If the timer lands first the room is a
+  // frame of bare `--room-bg`, which is warm paper, in the middle of a fade to black.
+  h.focusState === 'window' ? cutMsFor(h) + 80 : COVER_MS;
 
 /**
  * How long the poster takes to hand over to the canvas, and therefore how long it stays
@@ -76,6 +128,30 @@ export default function Room() {
   // Esc has to know about it — the first Esc inside a project steps back to the grid, and
   // only a second one leaves the monitor (mirrors requestExit below).
   const [project, setProject] = useState<string | null>(null);
+  /**
+   * Whether the room's ambient audio is actually playing — not whether it was asked for.
+   * `roomAudio.toggle()` resolves to what happened, because a page load is not a gesture and
+   * a browser is entitled to refuse.
+   */
+  const [audioOn, setAudioOn] = useState(false);
+  const audioRef = useRef<RoomAudio | null>(null);
+  /**
+   * The veil schedule currently in force — which destination the camera is approaching, in
+   * the only terms the rig cares about. A ref rather than state because `onBeforeFrame` is
+   * built once at mount and reads this 60 times a second; making it state would rebuild the
+   * renderer's whole callback chain on every push.
+   *
+   * The default is the monitor's curve, which is the curve the room had before any of this
+   * was per-destination.
+   */
+  const veilRef = useRef<{ start: number; full: number }>(DEFAULT_VEIL);
+
+  /**
+   * Which input drove the last interaction, for the focus panels' arrival focus. Owned here
+   * rather than inside each panel because a panel mounts *because of* the click it needs to
+   * classify, so its own listener is always a beat too late — see useLastInput.ts.
+   */
+  const lastInputRef = useLastInput();
 
   // The rAF callback and the observers need the current phase without being re-created
   // every time it changes, so it is mirrored into a ref.
@@ -113,6 +189,14 @@ export default function Room() {
       rig.update(dt);
       const push = rig.progress();
       root.style.setProperty('--push', push.toFixed(3));
+
+      // The veil, resolved here rather than in CSS. Its schedule is per destination now
+      // (hotspots.ts), which makes the CSS expression need a start, a slope and clamps at
+      // both ends — and an unparseable `filter` fails silently and totally. See the note
+      // above `.room--busy .room__canvas`.
+      const { start, full } = veilRef.current;
+      const t = Math.min(1, Math.max(0, (push - start) / (full - start)));
+      root.style.setProperty('--veil-t', t.toFixed(3));
 
       // **The ambient layer comes back when the camera is home, not when the panel clears.**
       // Those are 550ms apart: `.room--busy` is dropped at `closeMs` (200ms), because that
@@ -196,6 +280,27 @@ export default function Room() {
     };
   }, []);
 
+  // ---- the record player ---------------------------------------------------
+  //
+  // Created once and disposed with the island. Nothing is fetched here — `roomAudio` builds
+  // its `<audio>` on the first play, so a visitor who never touches the speaker never pays
+  // for the loop.
+  //
+  // A remembered preference is *armed*, not obeyed: this attempt is made without a gesture
+  // and will usually be refused, in which case the light stays off and the stored preference
+  // is left alone so the next click picks it up.
+
+  useEffect(() => {
+    const audio = createRoomAudio();
+    audioRef.current = audio;
+    if (audio.remembered()) void audio.toggle().then(setAudioOn);
+    return () => { audio.dispose(); audioRef.current = null; };
+  }, []);
+
+  const toggleAudio = useCallback(() => {
+    void audioRef.current?.toggle().then(setAudioOn);
+  }, []);
+
   // ---- viewport size, for placing the hotspots -----------------------------
 
   useEffect(() => {
@@ -238,6 +343,13 @@ export default function Room() {
     // to move. The takeover's delay exists to trail a push, so without one it is just dead
     // air over a photograph. Cut instead, the same way reduced motion does.
     const noApproach = reduced || !rig;
+
+    // Arm this destination's own veil schedule before the camera starts. How fast the room
+    // has to fall away is a fact about the object being approached — what the reconstruction
+    // has for it, and how hard the push magnifies it — so it is authored per hotspot rather
+    // than being one curve for the whole room.
+    veilRef.current = h.veil ?? DEFAULT_VEIL;
+
     rig?.pushToImagePoint(h.aim[0], h.aim[1], h.disparity, h.travel);
     setFocus(h);
     setPhase('entering');
@@ -247,7 +359,7 @@ export default function Room() {
       // Only now, with the panel opaque, is it safe to stop drawing. Doing it earlier
       // freezes the last frame of the push in plain sight.
       rendererRef.current?.stop();
-    }, noApproach ? 0 : COVER_MS);
+    }, noApproach ? 0 : coverMsFor(h));
   }, [reduced]);
 
   const leave = useCallback(() => {
@@ -360,6 +472,10 @@ export default function Room() {
     const out = new Map<string, ScreenRect>();
     if (view.w && view.h) {
       for (const h of HOTSPOTS) out.set(h.id, imageRectToScreen(h.rect, view.w, view.h, aspect));
+      // Same crop, same map. The two grammars are separate everywhere the *interaction*
+      // differs and identical everywhere it does not, and where a rect lands on the art is
+      // not a question about what happens when you click it.
+      for (const c of CONTROLS) out.set(c.id, imageRectToScreen(c.rect, view.w, view.h, aspect));
     }
     return out;
   }, [view, aspect]);
@@ -409,10 +525,14 @@ export default function Room() {
           always win: a wake and a focus ring draw over ambient light, never under it. */}
       <Ambient view={view} aspect={aspect} />
 
-      {/* The hotspots duplicate links that already exist in the document below, so the
-          layer is hidden from assistive tech rather than announced twice. The links
-          themselves stay real and focusable. */}
-      <div className="hotspots" aria-hidden={busy ? 'true' : undefined}>
+      {/* `inert`, not `aria-hidden`. While a focus panel is open this layer is behind an
+          `aria-modal` dialog and must be unreachable — but `aria-hidden` on a container of
+          real `<button>`s hides them from the accessibility tree while leaving them in the
+          tab order, which is the one combination the spec calls out as broken: Tab lands on
+          a control a screen reader cannot describe. `inert` removes them from both, and the
+          CSS `pointer-events: none` on `.room--busy .hotspots` becomes redundant rather than
+          load-bearing. At rest the layer is fully exposed, as rule 3 requires. */}
+      <div className="hotspots" inert={busy || undefined}>
         {HOTSPOTS.map((h) => {
           const box = boxes.get(h.id);
           return box ? (
@@ -428,26 +548,76 @@ export default function Room() {
         })}
       </div>
 
-      {focus && (
-        <MonitorFocus
-          hotspot={focus}
-          project={project}
-          onSelectProject={selectProject}
-          // Where the clip starts: the screen's rect *after* the push, or — on the paths
-          // where no camera ever moves — where it simply is. Handing the pushed rect to a
-          // still image would open the panel from a big centred rectangle sitting on
-          // nothing.
-          screen={noCamera
-            ? imageRectToScreen(focus.rect, view.w, view.h, aspect)
-            : pushedRectToScreen(focus.rect, focus.aim, focus.travel, view.w, view.h, aspect)}
-          view={view}
-          open={phase !== 'leaving'}
-          reducedMotion={reduced}
-          cut={noCamera}
-          webgl={webgl}
-          onExit={requestExit}
-        />
-      )}
+      {/* The second grammar, in its own layer (rule 5, data/controls.ts): these change
+          something in place and never move the camera, so they are toggle buttons rather
+          than links and they do not belong in the layer above. Same `inert` gate — a
+          control behind an open `aria-modal` panel has to be unreachable too. */}
+      <div className="controls" inert={busy || undefined}>
+        {CONTROLS.map((c) => {
+          const box = boxes.get(c.id);
+          return box ? (
+            <RoomControlButton
+              key={c.id}
+              control={c}
+              box={box}
+              view={view}
+              aspect={aspect}
+              on={audioOn}
+              onToggle={toggleAudio}
+            />
+          ) : null;
+        })}
+      </div>
+
+      {focus && (() => {
+        // One branch per `focusState`, and they no longer share a props shape — which is the
+        // honest outcome, not a wart. The two destinations arrive by different mechanisms
+        // (see "the cut" in room.css), so pretending they take the same inputs is what let
+        // the feeder inherit the monitor's grammar in the first place.
+        const open = phase !== 'leaving';
+
+        // **The window takes no rectangle**, and that is the whole difference. The bench's
+        // panel is a clip that starts as the monitor's own rect and pushes its edges off the
+        // frame — it needs to know where the screen got to. The window cuts to the feeder's
+        // camera instead, so there is nothing to grow out of and nothing to measure.
+        if (focus.focusState === 'window') {
+          return (
+            <WindowFocus
+              hotspot={focus}
+              open={open}
+              // When the cut fires, in ms from the click. Zero on the paths with no approach
+              // to trail (reduced motion, no WebGL, poster still up) — which is why this
+              // replaced a `cut` boolean plus a `.focus--cut` class that only ever set the
+              // same number in CSS.
+              atMs={noCamera ? 0 : cutMsFor(focus)}
+              lastInputRef={lastInputRef}
+              onExit={requestExit}
+            />
+          );
+        }
+
+        // Where the clip starts: the object's rect *after* the push, or — on the paths where
+        // no camera ever moves — where it simply is. Handing the pushed rect to a still
+        // image would open the panel from a big centred rectangle sitting on nothing.
+        const screen = noCamera
+          ? imageRectToScreen(focus.rect, view.w, view.h, aspect)
+          : pushedRectToScreen(focus.rect, focus.aim, focus.travel, view.w, view.h, aspect);
+        return (
+          <MonitorFocus
+            hotspot={focus}
+            screen={screen}
+            view={view}
+            open={open}
+            cut={noCamera}
+            project={project}
+            onSelectProject={selectProject}
+            reducedMotion={reduced}
+            webgl={webgl}
+            lastInputRef={lastInputRef}
+            onExit={requestExit}
+          />
+        );
+      })()}
     </div>
   );
 }

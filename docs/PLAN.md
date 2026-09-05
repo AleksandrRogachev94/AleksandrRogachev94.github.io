@@ -203,6 +203,63 @@ step; everything else regenerates from the master. **Build against flat placehol
 with no code changes.
 
 
+### The window does not open a panel — it cuts
+
+**Corrected after it shipped wrong, and the correction is worth keeping.** The bench's
+takeover is a clip that starts as the object's own rectangle and pushes its edges off the
+frame. That shape is not neutral: it *asserts* that this object becomes the viewport, which
+is true of a monitor and false of everything else. Reusing it for the feeder made clicking a
+bird feeder feel like being teleported into the monitor.
+
+BirdLense is a camera, so the window cuts to the other camera. Each destination gets its own
+verb — you sit down at the monitor, you look through the window — and that is what makes the
+room a place rather than a menu with good art.
+
+Three things had to be true at once, and getting any one wrong brought the seam back:
+
+1. **The room falls away early.** The veil is per-object now (`veil` in `hotspots.ts`): the
+   feeder starts dimming at push 0.15 and is at the floor by 0.70, against the monitor's
+   0.45–1.0. It can afford that *because* it cuts — a panel that grows out of an object needs
+   the room legible up to the handoff, so it cannot dim early. The feeder is 8.3m out and
+   off-axis, which is the worst case in the room for SHARP, so this also fixed visible black
+   holes in the reconstruction. **The arrival grammar and the veil schedule are one decision.**
+2. **No held beat.** The first attempt kept `blackPauseMs` from the bench. That produced
+   stop → hold → flash: three events where there should be one motion. The bench earns its
+   pause because a machine is powering on; nothing is powering on here.
+3. **The two sides of the cut must match.** The room bottoms out at 12% brightness and 9px of
+   blur, so the incoming view *starts* at 12% and 6px and then exposes and pulls focus while
+   still moving inward. Matching luminance and softness across a cut is what makes it
+   invisible; without that it is a bright rectangle replacing a dark room, which is the
+   "flash" no easing can hide.
+4. **The incoming view must move the same way the camera was moving.** The first exposure ran
+   `scale(1.06) → 1.0`: the camera pushed *in* for 900ms and the picture that replaced it
+   moved *out*. A reversal of sign at a cut is the most visible thing that can be put there,
+   and it read as a flash even though nothing about it was bright. It scales up now, and
+   decelerates once, at the end.
+5. **The cut fires while the camera is still moving, not when it stops.** This is the one that
+   needed measuring. `LINEAR_TAIL` in `cameraRig.ts` exists so the push does not arrive at
+   zero velocity — but *apparent* size is what the eye reads, and that gain is hyperbolic in
+   `travel`. At the monitor's 0.84 the magnification is still accelerating at the handoff,
+   1.56x the average rate; at the feeder's 0.55 the same tail leaves it at **0.56x**, so the
+   push visibly glides to a halt and then a second thing starts. That is the whole of
+   "it decelerates and stops for a moment, then the screen expands". A number tuned for one
+   `travel` does not carry to another.
+
+   The fix is not to retune the ease. The feeder's veil is at its floor by push 0.70, so the
+   last third of that approach is a dark smear with nothing in it — and it is exactly the
+   third in which the camera slows down. Cutting on 0.70 rather than on 1.0 means the camera
+   is still at speed on the frame it leaves and its stop is never seen by anyone. Room.tsx
+   converts push units into wall-clock with `pushTimeFor` (0.70 of the push is 0.60 of its
+   duration, because `progress()` is eased), so nothing hand-picks the instant. The gesture
+   went from 900 + 1150ms to 536 + 760.
+
+**And the destination itself had to change.** The first version showed the project's
+dashboard — a screenshot of a web UI, framed, on a dark panel — so it still read as another
+monitor no matter how you arrived at it. No transition can fix a destination that is a
+picture of a computer screen. It now shows one frame from the feeder's own camera, full
+bleed, with the tracker's box and the classifier's 88% still on it. The app's own screens
+moved to `/birdlense`, where a scrolled page is the right container for them.
+
 ### The last stretch is the screen's, not the camera's
 
 Settled after building it the other way twice. The push stops with the monitor filling
@@ -293,14 +350,87 @@ anywhere**, and overloading a destination with a toggle breaks the grammar. So t
 has a second, smaller class of object: **room controls — click, something changes, the
 camera never moves.**
 
-**Ambient audio.** A small record player on the maker bench. Chill music, **off by
-default** — browsers block autoplaying audio without a user gesture, so "on by default"
-is not implementable, and unsolicited sound is the fastest way to lose a visitor
-regardless. One click starts it; the choice is remembered in `localStorage`. Audio is
-cheap, so like the ambient tier it is exempt from the one-live-element rule — but it
-**must pause on `document.hidden`**, or it keeps playing in a background tab. v1 ships a
-CC-licensed loop; the right long-term answer is **Alex's own guitar**, which
+**Ambient audio — built.** The speaker on the shelf (`src/data/controls.ts`,
+`src/scripts/roomAudio.ts`). Chill music, **off by default** — browsers block autoplaying
+audio without a user gesture, so "on by default" is not implementable, and unsolicited
+sound is the fastest way to lose a visitor regardless. One click starts it; the choice is
+remembered in `localStorage`. Audio is cheap, so like the ambient tier it is exempt from
+the one-live-element rule — but it **must pause on `document.hidden`**, or it keeps playing
+in a background tab. `stage.registerAmbient` is that hook and this is its only member. It
+ships "Sakura Meditate Beat" by moodmode under the **Pixabay Content License** — free for
+commercial use, attribution not required, credited in index.astro's colophon anyway. Note it
+is *not* Creative Commons: it permits use in a work, not redistribution of the file, which
+matters if it is ever swapped. The right long-term answer is **Alex's own guitar**, which
 retroactively justifies the instrument on the wall.
+
+Three things fell out of building it that the plan did not have:
+
+- **A remembered preference is armed, not obeyed.** A page load is not a gesture, so the
+  resume attempt on a return visit is usually refused. When it is, the light stays off and
+  the stored preference is left alone, so the next click picks it up. The toggle resolves to
+  what *happened*, never to what was asked — which is also why the lit state is driven by
+  the attempt's result rather than by the click.
+- **Nothing is fetched until the first click.** The `<audio>` element is built on first play,
+  so a visitor who never touches the speaker never downloads the loop.
+- **Nothing on a control lights in a destination accent.** The accents are one per project
+  and each belongs to one; borrowing one would say the control took you somewhere. Its
+  *wake* — the object brightening under the pointer — comes up in `--room-amber`, the room's
+  own practicals, so it reads as the room responding. Its *standby LED* is white, because
+  that is what a power indicator is on hardware and white belongs to nobody. That is the two
+  grammars said in light, and it is worth keeping as a rule.
+
+**It has a standby light at rest, and getting there meant giving up a rule and then failing
+three more times.** The first build left the speaker dark until clicked, on the argument that
+an unprompted light would make the promise the ambient tells make — *the things that are alive
+are the things you can enter* — and then break it. Two problems: that rule already had an
+exception, since the mug steams and is not clickable, and in practice nobody could tell the
+speaker was interactive at all.
+
+The rule that replaces it is **an electronic light means an object you can act on**, and the
+grammars are separated by *how* rather than whether:
+
+| | destinations | room controls |
+|---|---|---|
+| cadence | blink or breathe — a device taking a frame, a machine idling | breathe at rest; snap when switched |
+| colour | the destination's own accent | white for the LED, `--room-amber` for the wake |
+| on | n/a | steady, and it arrives in ~90ms |
+
+Breathing means waiting and steady means on, which is how the hardware behaves. The lit state
+is also the only feedback an audio toggle can have, since a toggle whose entire effect is a
+sound is unusable the moment the sound fails to start.
+
+**Three attempts failed before that worked, and each failed for a reason worth writing down.**
+
+- **A slow pulse of the object's own wake.** Invisible, and not because of its amplitude: a
+  slow, edgeless, low-contrast luminance ramp is close to the worst case for human vision,
+  while the hover reads instantly because it is a *step*. The deeper fault is that the tell
+  and the hover response were then *the same visual*, so the most a resting light could ever
+  say was "faintly hovered". **A resting affordance has to be a different kind of object than
+  the hover response** — which is what made it a point light instead of a tint.
+- **The point light placed on the middle of the cabinet, then off to one side.** Both read as
+  a blemish on the paint. The x offset was never the problem: **the curved side of that
+  speaker has no feature to host a light** — no bezel, no panel, no seam — so a dot anywhere
+  on it attaches to nothing. It went to the top face, where a cylindrical speaker's indicator
+  physically is. **A light needs a surface that explains it**, which is the same finding the
+  ambient tier reached from the other end: the feeder's tell works because there is an actual
+  camera module painted where it sits.
+- **A 260ms fade between standby and playing.** Pressing the speaker felt like moving a
+  slider. A device coming on does not ramp — it is up inside a tenth of a second, dips once
+  as the thing behind it draws current, and settles.
+
+One thing that is *not* on that list: colour temperature does the work the blend mode could
+not. The speaker is a pale cylinder in a sun patch, so `screen` has no headroom to add light
+into and a white `screen` layer over it is arithmetically nothing. The LED is painted instead
+— a near-white dot on warm plaster, **brighter and cooler** than everything around it, which
+is what an LED on a cream speaker actually looks like.
+
+**It stays a control, not a hotspot.** Rule 5 says never make one object both, and the
+concrete cost of promoting it is the point: a hotspot pushes the camera until the object
+fills the frame and hands over to a focus state, and there is nothing to put behind a
+speaker. You would trade "start the music and stay in the room, watching the room respond"
+for a 900ms move onto a near-black panel with a play button on it. If a *music destination*
+is wanted later, that is the guitar, which PLAN.md already reserves — two objects, two
+grammars, neither overloaded.
 
 The guitar itself stays a *destination* (a future music/hobby focus state), not the audio
 toggle.
@@ -323,10 +453,51 @@ none of this is mouse-only or discoverable by accident alone.
 
 A room full of things whose contents nobody finds is the main UX risk. All required:
 
-- Hover/focus gives a soft rim-light plus the object's label.
-- A quiet persistent list of destinations in a corner — never the only way in.
-- First visit plays one slow ambient drift past the live objects.
-- Every hotspot is a real focusable `<button>`; Tab walks them in order.
+- ~~Hover/focus gives a soft rim-light plus the object's label.~~ Built, and the rim-light
+  became a *wake* — the object's own light coming up, baked from its SAM mask. A hairline
+  rim on the silhouette was tried and is in CLAUDE.md's do-not-reopen list: it is a
+  screen-space overlay on art that parallax keeps nudging, so it comes visibly unglued.
+- **A quiet persistent list of destinations in a corner — built, then pulled.** It worked
+  and it was still wrong: a literal index is website chrome sitting on a painting, and the
+  rule two sections up is that *the room is the person and carries no lists*. What it was
+  covering for is real, though, and had to be replaced rather than dropped — see below.
+- ~~First visit plays one slow ambient drift past the live objects.~~ **Superseded by
+  something better: the objects announce themselves continuously instead of once.** Every
+  hotspot now carries a small electronic tell in the ambient tier — the feeder's camera
+  blinks a recording cadence, the rover's panel breathes, the ultrawide's glow is never
+  quite still — so the room teaches one rule with no text at all: **the things that are
+  alive are the things you can enter.** A visitor picks it up in seconds, it never reads as
+  UI, and unlike a one-time introduction there is no way to miss it by arriving late.
+
+  This is also the only affordance that reaches touch. The wake answers to `:hover` and
+  `:focus-visible`; a phone has neither, so before the tells the room on a phone was a
+  still picture with three invisible tap targets. That, not desktop discoverability, is
+  what the corner list was really for, and it is what the tells actually solve.
+
+  The earlier failed attempt — every hotspot lighting itself once, staggered, after the
+  room settled — is worth distinguishing from this. It failed because it *ended*: motion
+  that plays once and stops is an event, and an event nothing explains reads as a glitch.
+  A light that has always been blinking is a property of the object and explains itself.
+
+  **The mug is not a counterexample.** Steam is drifting vapour; the tells are point lights
+  on a machine cadence. Different vocabularies, so warm ambient life on non-interactive
+  props stays free — it is putting a *blinking indicator* on one that would break the rule.
+- ~~Every hotspot is a real focusable `<button>`; Tab walks them in order.~~ Built, as an
+  `<a href>` — see the note at the top of `src/components/Hotspot.tsx` for why a link
+  serves rule 3's actual intent better than a button does.
+
+**Known gaps.** Two, both small and both real.
+
+`.room--busy` hides the hotspot layer with `opacity` and `pointer-events`, which closes the
+mouse half but not the keyboard half: the anchors stay tabbable behind an `aria-modal`
+panel, so Tab can move the keyboard somewhere the visitor cannot see. `visibility: hidden`
+is the fix.
+
+`prefers-reduced-motion` disables the whole ambient layer (`display: none`), which is
+correct — a frozen LED is a painted dot, not a light. But it means a visitor on reduced
+motion *and* touch gets no in-room affordance at all and falls back to the document below.
+A defensible floor rather than a bug, but it is the one combination the room cannot speak
+to itself.
 
 ## Architecture
 
@@ -443,4 +614,5 @@ Status strip carries real values: `birdlense · yolo + bytetrack · <species> ·
   so one depth map and one set of hotspot rectangles serve every variant, and day/night can
   be cross-faded directly. Fresh *generations*, by contrast, do drift — hence rule 1 in
   PROMPTS.md.
-- Audio track for the record player: CC-licensed loop for v1, Alex's own playing later.
+- Audio track for the record player: a Pixabay-licensed loop for v1 (moodmode, "Sakura
+  Meditate Beat"), Alex's own playing later.

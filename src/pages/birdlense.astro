@@ -1,0 +1,165 @@
+---
+/**
+ * BirdLense's real page (CLAUDE.md rule 2).
+ *
+ * Every destination in the room resolves to a URL that stands up on its own, and this is
+ * that URL for the window. Three audiences land here rather than in the focus state: a
+ * crawler, a visitor with JavaScript off, and anyone on `prefers-reduced-motion` who
+ * followed the link instead of the camera. They must all get the same facts, so the page and
+ * `WindowFocus.tsx` read the *same module* — src/data/birdlense.ts — rather than two copies
+ * of the same prose drifting apart.
+ *
+ * **It lives at the root, not under /software.** Not an oversight: CLAUDE.md's organizing
+ * principle splits by where a thing exists. `/software/*` is the bench — things that exist
+ * only as code. A bird feeder in the yard is physical, so it has a room address and a
+ * top-level page, the same way RoboTrail will.
+ *
+ * The page is styled as a focus state, like the project pages are: dark half of the palette,
+ * this destination's own accent. It is what the room shows you, without the room.
+ */
+import '../styles/tokens.css';
+import { SHOTS, FACTS, NOTES, REPO } from '../data/birdlense';
+
+const title = 'BirdLense — Alex Rogachev';
+const description = 'A Raspberry Pi bird feeder that watches, listens and keeps a log: '
+  + 'a two-stage YOLO detector with ByteTrack, and BirdNET for the calls.';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body class="project-page" style={{ '--accent': 'var(--accent-birdlense)' }}>
+    <main>
+      <p class="crumb"><a href="/">← the room</a></p>
+
+      <header class="head">
+        <h1>BirdLense</h1>
+        <p class="status">
+          <span class="status__dot" aria-hidden="true"></span>
+          live
+          <span class="status__sep">·</span>
+          YOLO + ByteTrack · BirdNET · Raspberry Pi · Docker
+        </p>
+      </header>
+
+      <p class="lede">
+        A Raspberry Pi in the yard records what visits the bird feeder, works out what it was
+        from the video and the audio, and writes it down. Everything shown below is one day at
+        one feeder — the numbers are its own.
+      </p>
+
+      {NOTES.map((n) => (
+        <section class="note">
+          <h2>{n.h}</h2>
+          <p>{n.p}</p>
+        </section>
+      ))}
+
+      <dl class="rail">
+        {FACTS.map(([k, v]) => (
+          <div><dt>{k}</dt><dd>{v}</dd></div>
+        ))}
+      </dl>
+
+      {/* The same three shots the focus state shows, stacked instead of swapped — a page
+          scrolls, so it has no reason to make you click for the second one. `loading="lazy"`
+          on all but the first: below the fold on every viewport, and this page is as likely
+          to be reached by a crawler as by a person. */}
+      {SHOTS.map((shot, i) => (
+        <figure class="shot">
+          <img
+            src={shot.src}
+            alt={shot.alt}
+            width="1600"
+            loading={i === 0 ? 'eager' : 'lazy'}
+            decoding="async"
+          />
+          <figcaption>{shot.caption}</figcaption>
+        </figure>
+      ))}
+
+      <p class="links">
+        <a href={REPO} target="_blank" rel="noopener">Source on GitHub ↗</a>
+      </p>
+    </main>
+
+    <style>
+      /* This page IS a focus state — dark half of the palette, this destination's accent.
+       * Matches src/pages/software/flowlab.astro deliberately: a visitor who lands on either
+       * without going through the room should recognise them as the same kind of surface. */
+      .project-page {
+        background: var(--focus-bg);
+        color: var(--focus-ink);
+        min-height: 100svh;
+      }
+      main { max-width: 76ch; margin: 0 auto; padding: 48px 24px 96px; }
+
+      .crumb { font: 12px/1 var(--font-mono); color: var(--focus-ink-soft); margin: 0 0 32px; }
+      .crumb a { color: var(--accent); text-decoration: none; }
+      .crumb a:hover { text-decoration: underline; }
+
+      .head { margin: 0 0 0.5em; }
+      h1 { font-size: 1.75rem; margin: 0 0 0.3em; }
+
+      .status {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0;
+        font: 12px/1.4 var(--font-mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--focus-ink-soft);
+      }
+      .status__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+      .status__sep { opacity: 0.5; }
+
+      .lede { color: var(--focus-ink-soft); font-size: 1.05rem; margin: 20px 0 40px; }
+
+      .note { margin: 0 0 28px; }
+      .note h2 { font-size: 1.05rem; margin: 0 0 0.35em; }
+      .note p { margin: 0; color: var(--focus-ink-soft); line-height: 1.65; }
+
+      .rail {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 18px;
+        margin: 36px 0 44px;
+        padding: 18px 0;
+        border-top: 1px solid var(--focus-line);
+        border-bottom: 1px solid var(--focus-line);
+        font: 12px/1.5 var(--font-mono);
+        letter-spacing: 0.08em;
+      }
+      .rail > div { display: contents; }
+      .rail dt { color: var(--focus-ink-soft); text-transform: uppercase; }
+      .rail dd { margin: 0; }
+
+      .shot { margin: 0 0 40px; }
+      .shot img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 1px solid var(--focus-line);
+      }
+      .shot figcaption {
+        margin-top: 10px;
+        font-size: 0.875rem;
+        line-height: 1.55;
+        color: var(--focus-ink-soft);
+      }
+
+      .links { margin: 40px 0 0; font-size: 0.95rem; }
+      .links a { color: var(--accent); text-underline-offset: 3px; }
+    </style>
+  </body>
+</html>

@@ -33,7 +33,13 @@
    * A new destination adds a token here and uses it via --accent. */
   --accent-flowlab: #4cc2ff;
   --accent-birdlense: #6fd88a;
-  --accent-robotrail: #ff9d44;
+  /* Violet, and it used to be amber (#ff9d44). Amber is the room's *own* light — it is
+   * literally `--room-amber`, the token for the lamp and the monitor spill — so the rover's
+   * status light was the one accent painted in the same hue as the surface under it, on the
+   * floor, in the middle of the warm pool. It read as a reflection rather than as a machine.
+   * An accent has to be a colour the room does not already have. Violet is also the only
+   * gap left between cyan and green, so the three destinations stay legible as peers. */
+  --accent-robotrail: #a882ff;
   --accent-note: #f0b95e;
   --accent: var(--accent-flowlab); /* overridden per focus state */
 

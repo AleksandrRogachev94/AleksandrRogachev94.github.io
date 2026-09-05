@@ -45,14 +45,14 @@
  * no coordinates — but it made this element the size of the viewport, and `mix-blend-mode`
  * takes an element off the compositor's fast path, so every frame of the hover fade
  * repainted and re-blended the entire room. That is what made the glow ease and then snap.
- * It still lives inside the anchor, offset back out, because that is what makes hover and
- * focus a plain CSS descendant selector rather than a piece of React state.
+ * The placement itself is ObjectLight.tsx, shared with the room controls.
  */
 
 import { useRef, type CSSProperties } from 'react';
 import type { Hotspot } from '../data/hotspots';
 import { SCENE } from '../data/scene';
-import { imageRectToScreen, reciprocalDepth, type ScreenRect } from '../scripts/roomGeometry';
+import { pinToArt, type ScreenRect } from '../scripts/roomGeometry';
+import ObjectLight from './ObjectLight';
 
 interface Props {
   hotspot: Hotspot;
@@ -72,36 +72,11 @@ interface Props {
 export default function HotspotButton({ hotspot, box, view, aspect, onActivate }: Props) {
   const lightRef = useRef<HTMLSpanElement>(null);
 
-  // The room parallaxes under this layer, so the rect has to follow it. `--par-x/y` are
-  // written on `.room` once per frame by the rig; the multiply by this object's own
-  // reciprocal depth happens here, in `left`/`top` rather than a transform — a transform
-  // would make this a stacking context and `.hotspot__light`'s `screen` blend would stop
-  // mixing with the canvas, which is the trap the comment above `.hotspot__wake` records.
-  const invZ = reciprocalDepth(hotspot.disparity, SCENE);
+  // The room parallaxes under this layer, so the rect has to follow it. `pinToArt` is the
+  // shared placement — including the reason it is `left`/`top` and never a transform.
   const style = {
-    left: `calc(${box.left}px + var(--par-x, 0) * ${invZ.toFixed(4)} * 1px)`,
-    top: `calc(${box.top}px + var(--par-y, 0) * ${invZ.toFixed(4)} * 1px)`,
-    width: `${box.width}px`,
-    height: `${box.height}px`,
+    ...pinToArt(box, hotspot.disparity, SCENE),
     '--accent': hotspot.accent,
-  } as CSSProperties;
-
-  // The wake is cropped to its own lit extent, so it is placed by its own rect rather than
-  // by the anchor's — through the same cover-crop the renderer uses, which is the only
-  // thing that has to be true for it to land on the object. Offset back out of the anchor,
-  // because it lives inside it: that is what makes hover and focus a plain CSS descendant
-  // selector rather than a piece of React state.
-  const lit = hotspot.wakeRect && imageRectToScreen(hotspot.wakeRect, view.w, view.h, aspect);
-  const wakeStyle = lit && ({
-    left: `${lit.left - box.left}px`,
-    top: `${lit.top - box.top}px`,
-    width: `${lit.width}px`,
-    height: `${lit.height}px`,
-  } as CSSProperties);
-
-  const maskStyle = {
-    maskImage: `url(${hotspot.wake})`,
-    WebkitMaskImage: `url(${hotspot.wake})`,
   } as CSSProperties;
 
   return (
@@ -140,13 +115,15 @@ export default function HotspotButton({ hotspot, box, view, aspect, onActivate }
         onActivate(hotspot);
       }}
     >
-      {hotspot.wake && wakeStyle && (
-        // A bare positioning wrapper, and it has to stay bare: the light is `screen`-blended
-        // and any ancestor carrying opacity or a filter would isolate the group, stop it
-        // mixing with the canvas, and turn it back into a flat accent decal.
-        <span className="hotspot__wake" style={wakeStyle} aria-hidden="true">
-          <span ref={lightRef} className="hotspot__light" style={maskStyle} />
-        </span>
+      {hotspot.wake && hotspot.wakeRect && (
+        <ObjectLight
+          src={hotspot.wake}
+          wakeRect={hotspot.wakeRect}
+          box={box}
+          view={view}
+          aspect={aspect}
+          lightRef={lightRef}
+        />
       )}
       <span className="hotspot__label">{hotspot.label}</span>
     </a>

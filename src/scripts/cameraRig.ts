@@ -155,6 +155,28 @@ const LINEAR_TAIL = 0.25;
 const ease = (k: number) => (1 - LINEAR_TAIL) * easeInOut(k) + LINEAR_TAIL * k;
 
 /**
+ * The fraction of `pushMs` at which the eased push reaches progress `p`. The inverse of
+ * `ease`.
+ *
+ * `progress()` is eased, so a schedule written in push units — hotspots.ts's `veil` — does
+ * not land at the same fraction of the *duration*. The feeder's veil bottoms out at push
+ * 0.70, which happens 0.60 of the way through the push, not 0.70. Anything that has to fire
+ * at a point on that schedule needs this, and hand-picking the number is precisely how the
+ * camera and the stylesheet drifted apart before (transition.ts). `ease` is monotone, so
+ * bisection is exact enough and needs no closed form for a curve that may yet change.
+ */
+export const pushTimeFor = (p: number): number => {
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (ease(mid) < p) lo = mid;
+    else hi = mid;
+  }
+  return (lo + hi) / 2;
+};
+
+/**
  * Idle drift's two periods, in ms. Deliberately not a round ratio of one another — a
  * Lissajous figure with commensurate periods traces a closed loop and repeats visibly
  * inside a single sitting; incommensurate ones only realign after their product, decades

@@ -47,6 +47,11 @@
   /* Fraction of the room's bytes that have arrived. Written from the fetch, not the rig,
    * and only while the poster is up. */
   --load: 0;
+  /* The veil's progress, 0..1, written every frame by the rig alongside `--push`. Declared
+   * here so the stylesheet reads on its own and so the room is unveiled if the island never
+   * hydrates. What schedule maps `--push` to this is the destination's business, not the
+   * room's — see `veil` in hotspots.ts. */
+  --veil-t: 0;
   /* The timeline. Room.tsx overwrites all five from transition.ts, which is the source of
    * truth; these are here so the file can be read on its own and so nothing breaks if the
    * island fails to hydrate. */
@@ -102,10 +107,26 @@
    * hiding it (see the note near `.boot__panel` below). Same start point, push 0.45. */
 }
 
+/* `--veil-t` is the veil's own normalised progress: 0 before it starts, 1 once it has
+ * bottomed out. **It is computed in JS and written next to `--push` every frame** (Room.tsx),
+ * not derived from `--push` in CSS here.
+ *
+ * That is a deliberate retreat from arithmetic this file cannot afford to get wrong. The
+ * schedule is now per destination (hotspots.ts), so the expression needs a start, a slope
+ * and clamps at both ends — and a `filter` that fails to parse does not warn. It becomes
+ * invalid at computed-value time, the veil silently stops existing, and the symptom is a
+ * room that stays bright through the whole approach with nothing in the console. The same
+ * silent-total-failure trap the boot chain below is written in longhands to avoid.
+ *
+ * `Math.min`/`Math.max` cannot fail to parse, the rig is already writing three custom
+ * properties on this element every frame, and a fourth costs nothing measurable.
+ *
+ * The endpoints stay fixed: 9px of blur and ~12% brightness at t = 1. What each object
+ * changes is *when* it gets there, not how far it goes. */
 .room--busy .room__canvas {
   filter:
-    blur(max(0px, calc(var(--push) * 17px - 8px)))
-    brightness(calc(1 - max(0, var(--push) * 1.6 - 0.72)));
+    blur(calc(var(--veil-t, 0) * 9px))
+    brightness(calc(1 - var(--veil-t, 0) * 0.88));
 }
 
 /* ---- the poster and the load ----------------------------------------------
@@ -240,9 +261,17 @@
  * documents, met from the other side. `filter: opacity()` on the wisp *itself* is fine:
  * a filter is applied to an element before it is blended, and it is ancestors, never the
  * element, that isolate. It also leaves the `opacity` property free for the keyframes,
- * which are already animating it. */
+ * which are already animating it.
+ *
+ * Scoped through `.ambient`, which the wisps get free from their prefix and `.glow` no longer
+ * does: it is worn by the room controls' standby LED too now, and that light is gated by
+ * `.controls`'s own rule at the bottom of this file. Same window, so nothing changes either
+ * way — but an unprefixed class reaching into a second grammar by accident is how two
+ * gates quietly become one. */
 .room--busy .ambient__wisp,
-.room[data-transit] .ambient__wisp {
+.room[data-transit] .ambient__wisp,
+.room--busy .ambient .glow,
+.room[data-transit] .ambient .glow {
   filter: opacity(0);
   transition-duration: 320ms;
 }
@@ -353,6 +382,141 @@
   animation-delay: -11.4s;
 }
 
+/* ---- the electronic tells -------------------------------------------------
+ * **The affordance, and the rule a visitor learns without being told: the things that are
+ * alive are the things you can enter.**
+ *
+ * The room is a still painting except where something moves, so a small light on an object
+ * is the room saying "this machine is on" — and it turns out that is enough. It replaces a
+ * corner list of destinations, which was built and pulled: a literal index is website chrome
+ * on a painting, and PLAN.md's own rule is that the room carries no lists.
+ *
+ * It also reaches the input nothing else here does. The hotspot wake answers to `:hover` and
+ * `:focus-visible`; a phone has neither, so before this the room on touch was a beautiful
+ * still picture with three invisible tap targets.
+ *
+ * All of it is `screen`-blended, which is only viable because every backdrop was checked
+ * first — the camera module is the darkest thing in that window, the rover's panel is black,
+ * and the ultrawide is a near-black rectangle by PROMPTS.md's own instruction. That check is
+ * what the prism effect died for want of (data/ambient.ts).
+ *
+ * Cost is the same as the steam's: keyframed opacity on a compositor layer, no per-frame JS,
+ * nothing for the one-live-element rule to protect against. */
+
+/* **One soft bloom, and it is not the ambient tier's private property** — hence `.glow`
+ * rather than `.ambient__glow`. The room controls' standby LED is the same shape, and the
+ * class names in this file are named for *the light* rather than for the grammar that owns
+ * it, the same way `.hotspot__light` is worn by a hotspot and a control alike.
+ *
+ * **It always sits inside a wrapper that carries the rect**, and that is structural, not
+ * stylistic: `inset: var(--bloom)` is how the light reaches past the thing emitting it, and
+ * an element that already has `left`, `top`, `width` and `height` on it is over-constrained
+ * — the `right` and `bottom` halves of that shorthand are simply dropped, the bloom silently
+ * does nothing, and what is left is a flat dot. A 30px indicator, a 25-inch panel and a
+ * speaker's standby light differ in `--bloom` and `--core` and in nothing else. */
+.glow {
+  position: absolute;
+  /* **How far the light blooms past the thing emitting it**, and the only number that
+   * differs between a 30px indicator and a 25-inch panel. Negative, so the element is
+   * larger than its rect.
+   *
+   * This is what makes it light rather than a decal. A glow clipped to the hardware reads
+   * as a painted dot; a rectangle of added colour with a step at every edge reads as a box,
+   * which is exactly what the monitor's first version was. The gradient below reaches
+   * transparent at the inscribed ellipse — which `border-radius: 50%` then clips to, so the
+   * two coincide and there is no edge anywhere in the effect. */
+  inset: var(--bloom, -150%);
+  border-radius: 50%;
+  /* `--core` is the flat centre before the falloff starts. The rover's indicator is ~31px
+   * across at a 1600px viewport, so a gradient that begins decaying at 0% has almost no
+   * actual light in it; a panel two hundred times that size needs no flat centre at all. */
+  background: radial-gradient(
+    closest-side,
+    var(--accent) 0%,
+    var(--accent) var(--core, 14%),
+    color-mix(in srgb, var(--accent) 52%, transparent) 40%,
+    transparent 100%
+  );
+  mix-blend-mode: screen;
+  opacity: 0;
+  will-change: opacity;
+  contain: paint;
+  /* Same fade-out contract as the wisps, and `filter` for the same reason: the keyframes
+   * own `opacity`, and fading a blended element from an ancestor flattens the blend. */
+  filter: opacity(1);
+  transition: filter 620ms cubic-bezier(0.33, 0, 0.2, 1);
+}
+
+/* The feeder's camera: a recording indicator. Mostly dark, then a quick double pulse — the
+ * cadence of a device taking a frame, which is what BirdLense is doing out there. A steady
+ * pulse would read as a power light and say nothing about what the thing does. */
+.ambient__fx--feeder-lens .glow {
+  /* 4.4s → 3.0s. Long enough to still read as intermittent rather than as a pulse, short
+   * enough that you are not waiting for it — at 4.4s you could look straight at the feeder
+   * and see nothing happen. */
+  animation: led-record 3s ease-in-out infinite;
+}
+
+@keyframes led-record {
+  0%, 84% { opacity: 0.10; }
+  88%     { opacity: 0.92; }
+  91%     { opacity: 0.16; }
+  94%     { opacity: 0.74; }
+  100%    { opacity: 0.10; }
+}
+
+/* The rover: idling, not recording. It breathes, slowly, and shares no common multiple with
+ * the feeder's period — two lights on the same cadence read as one animation used twice
+ * rather than as two machines that happen to be in the same room. */
+.ambient__fx--rover-status .glow {
+  animation: led-idle 5.2s ease-in-out infinite;
+}
+
+@keyframes led-idle {
+  0%, 100% { opacity: 0.20; }
+  50%      { opacity: 0.92; }
+}
+
+/* The monitor: a screen that is on rather than a screen that is painted.
+ *
+ * **Two things were wrong and only one of them was the amplitude.**
+ *
+ * The amplitude, first, because it is arithmetic: `screen` over a backdrop B adds roughly
+ * `a * (C/255) * (255 - B)`. The painted screen means B ≈ 64, so there is ~190 of headroom —
+ * but at the amplitudes originally used (0.030 → 0.078) the whole swing came to about **8
+ * levels out of 255**, spread over 7.3 seconds. Not subtle: absent.
+ *
+ * The shape was the worse of the two, and tripling the amplitude made it *more* visible.
+ * This was a flat gradient filling the panel's rect at `inset: 0` with a 4px corner radius —
+ * a hard-edged rectangle of added colour, and the brighter it got the more obviously it was
+ * a box sitting on the art. A monitor's light does not stop at the bezel. So it blooms 26%
+ * past the rect and falls to nothing well before it gets there: the light lands on the desk
+ * and the wall the way it should, and there is no boundary anywhere to find.
+ *
+ * It is still the quietest of the three per unit area, because it genuinely is ~750x their
+ * size. What sells a screen is that its glow is never quite still — so the swing carries two
+ * short dips, on the scale of a refresh rather than a breath. A slow swell of any amplitude
+ * reads as a fading backlight; a quick unevenness reads as on. */
+.ambient__fx--monitor-glow .glow {
+  /* Wide and coreless. The peak opacity is higher than the flat fill's was and the *mean* is
+   * lower, which is what a falloff costs and what buys the missing edge. */
+  --bloom: -26%;
+  --core: 0%;
+  animation: pane-flicker 5.2s ease-in-out infinite;
+}
+
+@keyframes pane-flicker {
+  0%, 100% { opacity: 0.14; }
+  20%      { opacity: 0.30; }
+  /* The two dips are deliberately tight — a couple of percent of the cycle, ~120ms. */
+  23%      { opacity: 0.22; }
+  26%      { opacity: 0.29; }
+  55%      { opacity: 0.17; }
+  74%      { opacity: 0.32; }
+  77%      { opacity: 0.25; }
+  80%      { opacity: 0.31; }
+}
+
 /* ---- hotspots ------------------------------------------------------------
  * The affordance is the object's own light, not an outline drawn around it. Three things
  * were tried before this one: a bordered rectangle (reads as a debug overlay), a soft glow
@@ -429,7 +593,8 @@
 
 /* Rule 3: the ring must always be visible, on art of any brightness. The outer white
  * keeps it legible over the dark monitor as well as the bright window. */
-.hotspot:focus-visible {
+.hotspot:focus-visible,
+.control:focus-visible {
   outline: var(--ring);
   outline-color: var(--room-ink);
   outline-offset: var(--ring-offset);
@@ -463,7 +628,9 @@
 }
 
 .hotspot:hover .hotspot__label,
-.hotspot:focus-visible .hotspot__label {
+.hotspot:focus-visible .hotspot__label,
+.control:hover .hotspot__label,
+.control:focus-visible .hotspot__label {
   opacity: 1;
   transform: none;
 }
@@ -471,6 +638,161 @@
 .room--busy .hotspot__label {
   transition: none;
   opacity: 0;
+}
+
+/* ---- room controls -------------------------------------------------------
+ * The second grammar (CLAUDE.md rule 5, data/controls.ts). A hotspot pushes the camera in;
+ * a control changes something in place. They share the wake — `.hotspot__wake` and
+ * `.hotspot__light` above are named for *the object's light*, not for the grammar that owns
+ * it, and both are placed and blended identically — and they share the focus ring, the label
+ * and the cut-out when a push starts.
+ *
+ * What is different is that a control is *always on the air*: it has a state, and it has to
+ * declare that it exists without being pointed at. That is a second light, not a second mode
+ * of the first one, and it is the whole of the section below.
+ *
+ * `<button>`, so the browser's own styling has to be undone. */
+
+/* **`pointer-events: none`, and it is not optional.** This layer is `inset: 0` — a
+ * full-viewport sheet — and it is painted *after* `.hotspots`, so without this it sits on
+ * top of every hotspot in the room and swallows the hover and the click. `.hotspots` gets
+ * away with having no such rule only because nothing is stacked above it; the moment a
+ * second overlay existed, the one on top had to opt out. The buttons opt back in.
+ *
+ * Same shape as `.deck__body`'s rule, and the same failure it was written for. */
+.controls {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.control {
+  position: absolute;
+  /* Restores what the layer above turns off. The buttons are the only thing in `.controls`
+   * that has any business receiving a pointer. */
+  pointer-events: auto;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 6px;
+  color: var(--room-ink);
+  font: inherit;
+  cursor: pointer;
+  /* The object's own light is the response. A blue flash over a painted speaker would be the
+   * browser's chrome landing on the art. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* **The standby light.** How you can tell there is anything to click here at all — and it
+ * is a point light on the object, not a tint of it.
+ *
+ * The first version was the wake, pulsing 0.12 -> 0.34 over 7.5s. Two things were wrong with
+ * it and only one of them was the amplitude. A slow, edgeless, low-contrast luminance ramp is
+ * close to the worst case for human vision — there is no step and nothing beside it to
+ * compare against — which is why the hover, an identical effect arriving in 260ms, read
+ * instantly and this did not. The deeper fault is that it was *the same visual as the hover*,
+ * so the most it could ever say was "faintly hovered", never "this machine is on". A resting
+ * affordance has to be a different kind of object than the hover response. data/controls.ts
+ * has the full argument.
+ *
+ * So: the room's existing vocabulary for "a machine is on", which it already teaches with the
+ * feeder's camera and the rover's panel. What separates the two *grammars* is hue — a
+ * destination lights in its own accent, a control in white or the room's amber, never in a
+ * colour that belongs to somewhere else — and what separates this control's two *states* is
+ * cadence:
+ *
+ *   standby   breathing, 4.3s — sharing no common multiple with the feeder's 3s or the
+ *             rover's 5.2s, so three lights in one room read as three machines
+ *   playing   steady, and brighter
+ *
+ * That is how the hardware behaves, and it means the on state needs no animation at all.
+ *
+ * **White, and it sets its own** rather than inheriting the control's `--accent` — which is
+ * the wake's amber, and stays that way. A power indicator is white on real hardware, and
+ * white is also the one colour that cannot be read as belonging to some destination.
+ *
+ * **Painted, not `screen`-blended**, and white is exactly why that matters. `screen` adds
+ * light and only shows where the backdrop has headroom; a pale cylinder standing in a sun
+ * patch has almost none, so a white `screen` layer over it is arithmetically nothing. Painted
+ * at full strength it is a flat near-white dot sitting on a warm, slightly yellow surface —
+ * brighter *and* cooler than everything around it, which is what an LED on a cream speaker
+ * actually looks like. **The contrast is colour temperature, not luminance**, and that is the
+ * only reason a white light works on a pale object at all; it is also why painting beats
+ * blending here rather than being a workaround for it. Losing the blend loses its trap too:
+ * nothing above this element has to stay free of opacity, filters or transforms.
+ *
+ * The wrapper carries the LED's rect on the art (RoomControl.tsx); the `.glow` inside it
+ * carries the light. See `.glow` above for why that split is load-bearing. */
+.control__led {
+  position: absolute;
+  pointer-events: none;
+}
+
+.control__led .glow {
+  /* Tight and hot in the middle, because at ~4px of core the falloff is most of the element:
+   * a gradient that starts decaying at 0% would have almost no actual light in it. */
+  --bloom: -140%;
+  --core: 22%;
+  /* Re-scoped for this subtree only. `.glow` paints `var(--accent)`, and on `.control` that
+   * is the wake's amber — correct there, wrong here. A hair off neutral toward blue, because
+   * a pure #fff dot on warm art reads as a UI element and an LED reads as slightly cool. */
+  --accent: #f6fbff;
+  mix-blend-mode: normal;
+  animation: led-standby 4.3s ease-in-out infinite;
+}
+
+/* The floor is high enough that the light never quite goes out — the breath is a machine on
+ * standby, not a machine blinking. Against warm plaster the bottom of the swing is a faint
+ * cool point and the top is unmistakably lit, which is the whole range this needs. */
+@keyframes led-standby {
+  0%, 100% { opacity: 0.40; }
+  50%      { opacity: 0.92; }
+}
+
+/* **Switching on is a snap, not a fade**, and this replaced a 260ms ease that made pressing
+ * the speaker feel like moving a slider. A device coming on does not ramp: the light is up
+ * inside a tenth of a second, dips once as the thing behind it draws its first current, and
+ * settles. That dip is the whole reason this is an animation and not a declaration — a plain
+ * step to full is dynamic enough to feel like a switch but says nothing about what the switch
+ * did, and 90ms of overshoot-and-settle reads as a machine starting.
+ *
+ * `both` holds the final keyframe, so the light stays steady afterwards with no second rule
+ * to keep in step. Switching *off* needs nothing at all: dropping `.control--on` hands
+ * `opacity` straight back to the breath, which snaps down to its floor, which is exactly what
+ * an LED going to standby does. */
+.control--on .control__led .glow {
+  animation: led-engage 300ms cubic-bezier(0.2, 0, 0.05, 1) both;
+}
+
+@keyframes led-engage {
+  0%   { opacity: 0.40; }
+  /* Up hard and slightly past where it lands. */
+  30%  { opacity: 1; }
+  52%  { opacity: 0.74; }
+  100% { opacity: 1; }
+}
+
+/* The wake goes back to meaning exactly what it means on a hotspot — you are pointing at
+ * this — and nothing else. It is deliberately not part of the on state: two lights saying
+ * one thing is how the first version ended up unable to say two. */
+.control:hover .hotspot__light,
+.control:focus-visible .hotspot__light { opacity: 0.4; }
+
+/* Gone for the whole gesture, and **two gates**, for the same reasons the ambient layer needs
+ * two: `.room--busy` lands the moment you click but is dropped at `closeMs` (200ms), while the
+ * camera goes on retreating for `releaseMs` (750ms). A hotspot's light can ignore the second
+ * half because it only appears on hover and the pointer is elsewhere by then. The standby LED
+ * is always on, so without `[data-transit]` it would switch back on 550ms early, pinned to a
+ * rest-position rect, over art still sliding underneath it.
+ *
+ * On the layer rather than the light, which is what makes this simple: `visibility` beats no
+ * specificity contest, so it does not have to out-rank `.control--on:hover`'s four classes,
+ * and it takes the button's hit-testing and tab order with it rather than leaving a live
+ * control under an open panel. */
+.room--busy .controls,
+.room[data-transit] .controls {
+  visibility: hidden;
 }
 
 /* ---- the handoff --------------------------------------------------------- */
@@ -512,6 +834,51 @@
  * the formula it feeds collapses correctly — --t1 no longer factors through --boot-ms alone
  * now that --boot0 has its own terms. */
 .focus--booted { --t1: var(--t0); }
+
+/* ---- the cut ---------------------------------------------------------------
+ * The window's arrival, and it is deliberately not the bench's.
+ *
+ * **`takeover` is not a generic "open a panel".** It is a clip that starts as the object's
+ * own rectangle and pushes its edges off the frame, and that shape *asserts something*: this
+ * object becomes the viewport. True of a monitor and false of everything else in the room.
+ * Run it on a bird feeder and the feeder behaves like a screen — which is exactly what it
+ * looked like, because that is what the animation says.
+ *
+ * BirdLense is a camera. So the window does not open a panel: **it cuts to the other
+ * camera**, the way a feed switches. The room falls away on the approach (its veil starts at
+ * 0.15 and is done by 0.70 — hotspots.ts), and the cut lands **on that number, not at the
+ * end of the push**: from 0.70 on there is nothing on screen but a dark smear, and that is
+ * also the stretch in which the camera decelerates. Cutting there means the camera is still
+ * moving underneath and its stop is never seen. `--t0` is written inline by Room.tsx, which
+ * converts 0.70 of the push into 0.60 of its duration (`pushTimeFor`). The `focus-in` blur is
+ * gone too: a display resolving as it wakes is a display cue.
+ *
+ * Each destination gets its own verb. You sit down at the monitor; you look through the
+ * window. That is what makes the room a place rather than a menu with good art. */
+
+.focus--feed {
+  /* **No held beat.** There was one — `--black-pause-ms`, borrowed from the bench — and it
+   * was the bug: the camera stopped, the frame held black, and then a bright picture
+   * appeared. Stop, pause, flash; three events where there should be one motion. The bench
+   * can afford that pause because it is a machine powering on and the pause is part of the
+   * fiction. Nothing is powering on here.
+   *
+   * The words follow the picture by a beat, which is the only stagger left. */
+  --t1: calc(var(--t0) + 320ms);
+}
+
+/* 1ms is a cut, not a fade. Written as an animation rather than a plain rule because `both`
+ * fills backwards through the delay — that is what keeps the panel off screen for the whole
+ * approach. Both selectors are two classes deep, so they beat the base `.focus--open` /
+ * `.focus--closing` rules on specificity rather than on source order. */
+@keyframes feed-cut { from { opacity: 0; } to { opacity: 1; } }
+
+.focus--feed.focus--open { animation: feed-cut 1ms linear var(--t0) both; }
+
+/* Leaving is a dissolve back to the room over the same `--close-ms` the bench collapses in.
+ * Not a second hard cut: arriving somewhere is a switch, but leaving is a retreat, and the
+ * camera is already pulling back underneath this (Room.tsx). */
+.focus--feed.focus--closing { animation: feed-cut var(--close-ms) linear 0ms reverse both; }
 
 /* An animation, not a transition: the panel is mounted already carrying its open class, so
  * a transition would have no start value to move from and would simply snap.
@@ -875,7 +1242,8 @@
 .deck__spacer { flex: 1; }
 .deck__clock { font-variant-numeric: tabular-nums; }
 
-.deck__led {
+.deck__led,
+.field__dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1210,8 +1578,207 @@
  * --push never leaves 0 and the canvas filter is inert on its own; the rest is collapsed
  * here so both halves agree. The boot is motion by definition and does not run at all —
  * MonitorFocus does not mount it. */
+/* ---- the window: BirdLense ------------------------------------------------
+ * The second focus state, and it took two goes to get right. The first showed a screenshot
+ * of the project's dashboard in a framed rectangle on a dark panel — which is to say, it
+ * showed a picture of a computer screen, so pushing into a bird feeder landed you on another
+ * monitor. **No transition could have fixed that**, because the problem was the destination,
+ * not the way you got there.
+ *
+ * What the feeder sees is a bird on a rail. So that is what fills the frame: one recording
+ * from the device's own camera, full-bleed, with the tracker's box and the classifier's
+ * verdict still on it because those are the output rather than chrome. The app's screens
+ * moved to the write-up, where a scrolled page is the right container for them.
+ *
+ * `.field` is on the `.focus` element itself rather than on a child. The bench needs a child
+ * (`.deck`) because a project panel stacks on top of it; there is no second level here.
+ */
+
+.field {
+  /* Not a grid any more: the view is the ground and everything else sits over it. */
+  display: block;
+}
+
+.field__view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Slightly right of centre, because the bird is — so a viewport narrower than the frame
+   * crops the empty rail rather than the subject. */
+  object-position: 60% 45%;
+
+  /* **The arrival, and the whole reason the cut stopped flashing.**
+   *
+   * It starts at brightness 0.12 and 6px of blur — which is *exactly where the room is* when
+   * the camera stops, because `--veil-t` bottoms out at 0.12 brightness and 9px of blur.
+   * Matching both sides of the cut means there is nothing to see at the cut itself: the room
+   * goes, the view arrives at the same luminance and the same softness, and then it exposes
+   * and pulls focus while still moving inward. One continuous motion instead of stop, hold,
+   * flash.
+   *
+   * This is not the bench's `focus-in`, which is a display waking. It is a camera exposing —
+   * which is what the object on the other end of this push actually is. */
+  /* `--ease-takeover`, not `--ease-camera`. The distinction is the whole point: a standard
+   * ease starts from *rest*, so the view would begin drifting inward from a standstill and
+   * the arrival would read as stop-then-start. That curve was derived (see `.focus--open`)
+   * to leave at the speed the camera arrives at and decelerate once, at the end. Its exact
+   * 1.4x initial slope was computed for the monitor's travel, so it is not a measured fit
+   * here — but starting at speed and stopping once is the property that matters.
+   *
+   * 760ms, down from 1150. The cut now fires at 0.60 of the push rather than at the end of
+   * it, so the whole gesture is ~540 + 760 instead of 900 + 1150: one move with a seam in
+   * it, not two moves in a row. */
+  animation: feed-expose 760ms var(--ease-takeover) var(--t0) both;
+}
+
+/* **It scales up, and it used to scale down.** The old keyframes went 1.06 → 1.0: the camera
+ * pushed *in* for 900ms and then the incoming picture moved *out*. A reversal of direction at
+ * a cut is the most visible thing you can put there, and it is what "then a flash, then it
+ * stops" was — not a brightness pop but a change of sign. The view now continues inward and
+ * decelerates to rest, which is one gesture.
+ *
+ * The exposure is the other half. It starts at brightness 0.12 and 6px of blur, which is
+ * *exactly where the room is* on the frame it leaves — `--veil-t` bottoms out at 0.12 and
+ * 9px — so both sides of the cut match in luminance and in softness and there is nothing to
+ * see at the cut itself. Then it exposes and pulls focus, which is what a camera does and
+ * what the object on the other end of this push actually is. */
+@keyframes feed-expose {
+  from { transform: scale(1);    filter: brightness(0.12) blur(6px); }
+  to   { transform: scale(1.04); filter: brightness(1) blur(0); }
+}
+
+/* Legibility for the column and nothing else — weighted left, because the bird sits right of
+ * centre and the text goes where the picture is quiet. The bottom band catches the narrow
+ * layout, where the column moves under the subject instead of beside it. */
+.field__scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(100deg,
+      color-mix(in srgb, var(--focus-bg) 92%, transparent) 0%,
+      color-mix(in srgb, var(--focus-bg) 78%, transparent) 30%,
+      transparent 62%),
+    linear-gradient(to bottom,
+      color-mix(in srgb, var(--focus-bg) 70%, transparent) 0%,
+      transparent 22%);
+}
+
+.field__bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 22px clamp(16px, 3.5vw, 40px) 14px;
+  font: 11px/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  color: var(--focus-ink-soft);
+  text-transform: uppercase;
+}
+
+.field__name { color: var(--focus-ink); letter-spacing: 0.15em; }
+.field__where { letter-spacing: 0.1em; }
+
+/* The column. Capped in `ch` rather than px so it stays a readable measure at any viewport,
+ * and pinned low-left so it sits in the scrim's deepest part. */
+.field__read {
+  position: absolute;
+  left: clamp(16px, 3.5vw, 40px);
+  bottom: clamp(24px, 5vh, 64px);
+  width: min(46ch, 44vw);
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.field__eyebrow {
+  margin: 0 0 10px;
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.field__h {
+  margin: 0 0 12px;
+  font-size: clamp(20px, 2.4vw, 30px);
+  line-height: 1.15;
+  color: var(--focus-ink);
+  /* The view behind can be light or dark depending on the crop; a shadow keeps the heading
+   * legible without needing the scrim to be heavy enough to kill the picture. */
+  text-shadow: 0 2px 18px color-mix(in srgb, var(--focus-bg) 90%, transparent);
+}
+
+.field__lede {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--focus-ink);
+  text-shadow: 0 1px 14px color-mix(in srgb, var(--focus-bg) 85%, transparent);
+}
+
+/* The one place the stack is stated as facts rather than prose — mono, because that is the
+ * dark palette's voice for measurements (rule 4). */
+.field__rail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0 0 20px;
+  padding: 14px 0;
+  border-top: 1px solid color-mix(in srgb, var(--focus-ink) 22%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--focus-ink) 22%, transparent);
+  font: 11px/1.5 var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.field__rail > div { display: contents; }
+.field__rail dt { color: var(--focus-ink-soft); text-transform: uppercase; }
+.field__rail dd { margin: 0; color: var(--focus-ink); }
+
+.field__links {
+  display: flex;
+  gap: 20px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.field__links a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; }
+.field__links a:hover { text-decoration: underline; }
+
+/* The words follow the view in, once it is most of the way exposed. One stagger, not four:
+ * the previous version staggered bar, caption, column and strip separately and the arrival
+ * turned into a sequence of things arriving. */
+.field__bar,
+.field__read {
+  animation: field-in 460ms var(--ease-camera) var(--t1) both;
+}
+.field__read { animation-delay: calc(var(--t1) + 110ms); }
+
+@keyframes field-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Narrow: the column goes under the subject rather than beside it, and the view crops to
+ * the bird instead of the rail. */
+@media (max-width: 760px) {
+  .field__read {
+    left: clamp(14px, 4vw, 24px);
+    right: clamp(14px, 4vw, 24px);
+    width: auto;
+    max-height: 52vh;
+  }
+  .field__view { object-position: 62% 40%; }
+  .field__where { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .focus--open { animation: none; }
+  /* Two classes deep, so these need naming: a media query adds no specificity, and the
+   * window's own rules would otherwise outrank the two above and keep animating. */
+  .focus--feed.focus--open { animation: none; }
+  .focus--feed.focus--closing { animation-duration: 0ms; }
   /* Still needs to leave, just without the 300ms. Zero duration keeps the class contract
    * identical so Room.tsx has no reduced-motion branch of its own to keep in step. */
   .focus--closing { animation-duration: 0ms; }
@@ -1223,9 +1790,29 @@
   /* More specific than .tile, so it needs naming or it keeps its pulse. */
   .tile--latest:not(:hover) { animation: none; }
   .tile { transition: none; }
+  /* The window's settle-in, and the per-shot one. Both are pure arrival decoration; without
+   * them the panel is simply there, which is what reduced motion asks for. */
+  .field__bar,
+  .field__read,
+  .field__view { animation: none; }
+  /* The exposure is the animation, so with it gone the view must be left somewhere sane —
+   * otherwise `both` holds the opening keyframe and the arrival is a dim, blurred photograph
+   * forever. Unfiltered and unscaled: the 1.04 the animation ends on is a resting place for a
+   * move, and there is no move. */
+  .field__view { filter: none; transform: none; }
   /* No introduction and no fade — but the wake is then the only thing saying the room is
    * interactive, so it appears at once instead of easing. */
   .hotspot__light { transition: none; }
+  /* The standby breath is the only thing saying the speaker can be clicked, so it holds at
+   * the middle of its own range rather than disappearing with the rest of the ambient tier.
+   * A light that is simply *on* is not motion, and reduced motion did not ask for a room with
+   * fewer affordances in it.
+   *
+   * Both states are needed here, because both are animations now: `led-engage` outranks the
+   * first rule on specificity and would otherwise keep running. Two declarations, and the
+   * switch between them is an instant cut — which is what this media query asks for anyway. */
+  .control__led .glow { animation: none; opacity: 0.6; }
+  .control--on .control__led .glow { animation: none; opacity: 1; }
   /* The poster still covers the load — that is not decoration, it is the difference
    * between a room and a blank rectangle — but it hands over in a cut, and Room.tsx
    * unmounts it on the same zero-length schedule so the two cannot disagree. */

@@ -41,6 +41,7 @@ import type { Hotspot } from '../data/hotspots';
 import { PROJECTS, type Project } from '../data/projects';
 import type { ScreenRect } from '../scripts/roomGeometry';
 import * as stage from '../scripts/stage';
+import type { LastInputRef } from './useLastInput';
 
 interface Props {
   hotspot: Hotspot;
@@ -63,6 +64,11 @@ interface Props {
   cut: boolean;
   /** Reported by the boot, because a self-test that cannot fail says nothing. */
   webgl: boolean;
+  /**
+   * Whether the last interaction was a pointer, so the focus move below can be skipped for
+   * mouse users. Owned by Room.tsx — see useLastInput.ts for why it cannot be owned here.
+   */
+  lastInputRef: LastInputRef;
   /**
    * Which project, if any, has been launched from the grid — lifted up to Room.tsx so Esc
    * can pop one level at a time (project → grid → room) instead of always leaving outright.
@@ -119,7 +125,8 @@ function useUptime() {
 }
 
 export default function MonitorFocus({
-  hotspot, screen, view, open, reducedMotion, cut, webgl, project, onSelectProject, onExit,
+  hotspot, screen, view, open, reducedMotion, cut, webgl, lastInputRef, project,
+  onSelectProject, onExit,
 }: Props) {
   const deckBackRef = useRef<HTMLButtonElement>(null);
   const appBackRef = useRef<HTMLButtonElement>(null);
@@ -191,28 +198,13 @@ export default function MonitorFocus({
     });
   }, [hotspot.id, shown?.id, shown?.demo]);
 
-  // Which input drove the most recent interaction — a click on a tile or the back link
-  // itself already focuses that element the normal way, so forcing focus onto a *different*
-  // control right after (below) is only for the benefit of someone navigating by keyboard.
-  // Doing it unconditionally made every launch/return leave a focus ring parked on "back"
-  // for mouse users too, since the browser can't tell a script's `.focus()` call apart from
-  // one that followed a keypress.
-  const lastInputRef = useRef<'pointer' | 'keyboard'>('keyboard');
-  useEffect(() => {
-    const onPointerDown = () => { lastInputRef.current = 'pointer'; };
-    const onKeyDown = () => { lastInputRef.current = 'keyboard'; };
-    addEventListener('pointerdown', onPointerDown, true);
-    addEventListener('keydown', onKeyDown, true);
-    return () => {
-      removeEventListener('pointerdown', onPointerDown, true);
-      removeEventListener('keydown', onKeyDown, true);
-    };
-  }, []);
-
   // Move focus onto whichever back control is on screen, so the keyboard follows both the
   // camera (on arrival) and a project launch/return. Keyed to `shown`, not `project`, so
   // this fires once the grid's back button actually exists rather than the instant the
   // close was requested. Room.tsx puts focus back on the hotspot once the whole panel closes.
+  //
+  // The pointer guard covers the arrival too, now that the ref is owned by Room rather than
+  // registered by this component's own mount — see useLastInput.ts.
   useEffect(() => {
     if (lastInputRef.current === 'pointer') return;
     (shown ? appBackRef : deckBackRef).current?.focus();

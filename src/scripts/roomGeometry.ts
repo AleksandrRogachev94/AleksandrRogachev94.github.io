@@ -112,6 +112,37 @@ export function reciprocalDepth(
 }
 
 /**
+ * The four CSS declarations that pin an overlay to a rect on the art and hold it there while
+ * the room parallaxes underneath.
+ *
+ * Three layers need exactly this and nothing else — hotspots, room controls, the ambient
+ * tier — and it was written out in all three. Same argument as `reciprocalDepth` above, one
+ * step later: three copies of one placement are three chances for the layers to disagree
+ * about where a thing is.
+ *
+ * **`left`/`top`, never a transform.** A transform makes the element a stacking context, and
+ * every one of these layers contains a `screen`-blended light that has to mix with the
+ * canvas; isolate the group and it turns back into a flat accent decal. That trap is the
+ * whole reason this is worth having in one place.
+ *
+ * `--par-x`/`--par-y` are written on `.room` once per frame by the rig, so the multiply
+ * happens in the stylesheet and a drifting camera costs no React renders.
+ */
+export function pinToArt(
+  box: ScreenRect,
+  disparity: number,
+  opts: { nearZ: number; farZ: number },
+): { left: string; top: string; width: string; height: string } {
+  const invZ = reciprocalDepth(disparity, opts).toFixed(4);
+  return {
+    left: `calc(${box.left}px + var(--par-x, 0) * ${invZ} * 1px)`,
+    top: `calc(${box.top}px + var(--par-y, 0) * ${invZ} * 1px)`,
+    width: `${box.width}px`,
+    height: `${box.height}px`,
+  };
+}
+
+/**
  * How far the room slides under a screen-space overlay when the camera translates.
  *
  * Hotspot rects are authored against the master and placed by `imageRectToScreen`, which

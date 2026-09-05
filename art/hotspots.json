@@ -86,6 +86,26 @@
           0.5206
         ]
       ]
+    },
+    {
+      "name": "speaker",
+      "why": "The room control, not a hotspot: ambient audio, click and it plays, the camera never moves (CLAUDE.md rule 5, src/data/controls.ts). It is the record player PLAN.md specifies, under the prop the prompt actually asks for. Boxed, then a negative for the shelf edge it sits on - the tones are close and SAM reaches for the shelf otherwise.",
+      "box": [
+        0.4093,
+        0.5177,
+        0.453,
+        0.6003
+      ],
+      "negative": [
+        [
+          0.4141,
+          0.5658
+        ],
+        [
+          0.415,
+          0.5787
+        ]
+      ]
     }
   ]
 }

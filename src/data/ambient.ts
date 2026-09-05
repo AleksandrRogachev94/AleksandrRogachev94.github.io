@@ -39,8 +39,17 @@
 
 import type { NormRect } from '../scripts/roomGeometry';
 
-/** Which renderer-side treatment an entry gets. One per visual idea, not one per object. */
-export type AmbientKind = 'steam';
+/**
+ * Which treatment an entry gets. One per visual idea, not one per object.
+ *
+ * There were three. `blink` (a point light on a device) and `flicker` (a screen's own glow)
+ * turned out to be the same element with two numbers in it — a soft radial bloom, screen
+ * blended, keyframed opacity — differing only in how far the light spreads past the thing
+ * emitting it and at what cadence. They are one `glow` now, tuned per id in room.css, and
+ * collapsing them is also what fixed the monitor: the "screen" treatment was a hard-edged
+ * rectangle of added colour, and you could see the box.
+ */
+export type AmbientKind = 'steam' | 'glow';
 
 export interface AmbientEffect {
   id: string;
@@ -60,8 +69,40 @@ export interface AmbientEffect {
    * this size is the whole effect sliding off the surface it belongs to.
    */
   disparity: number;
+  /**
+   * The light's own colour, for the electronic tells. Defaults to warm white.
+   *
+   * These are the destination accents, and that is not decoration leaking in from the UI —
+   * a camera's status LED is green and a robot's is amber in the world too, and the accents
+   * were chosen to belong to these objects in the first place. It does mean the room quietly
+   * previews each destination's colour, which is a bonus rather than the reason.
+   */
+  accent?: string;
 }
 
+/**
+ * **The organising rule, and the one a visitor actually learns: the things you can enter are
+ * the things that are alive.**
+ *
+ * The room is a still painting except where something moves, and every hotspot has its own
+ * small electronic tell. Nothing announces it; you notice within a few seconds that the
+ * feeder's camera is blinking and the rover's panel is breathing, and that is the whole
+ * affordance. It replaces a corner list of destinations that was built and removed — a
+ * literal index is website chrome sitting on a painting, and PLAN.md's own rule is that the
+ * room carries no lists. It also reaches the input the wake cannot: `:hover` and
+ * `:focus-visible` do not exist on a phone, and a blinking light does.
+ *
+ * **The mug is not a counterexample.** Steam is drifting vapour on a hot drink; the tells are
+ * point lights on an electronic cadence. They are different vocabularies and nobody confuses
+ * them, so "alive" reads as "this machine is on" rather than as "click here". Adding warm
+ * ambient life to *non*-interactive props is therefore fine and does not weaken the rule —
+ * adding a blinking LED to one would.
+ *
+ * Every rect below is measured off the locked day master, not estimated: the feeder's entry
+ * is the camera module visible inside the feeder box, and the rover's is the indicator
+ * cluster on its front panel. Disparities are the ones already measured for those objects'
+ * hotspots, because a light on an object is at that object's depth.
+ */
 export const AMBIENT: readonly AmbientEffect[] = [
   {
     id: 'mug',
@@ -100,5 +141,74 @@ export const AMBIENT: readonly AmbientEffect[] = [
     // 3.81m. tools/splat_probe.py reports median 0.263 at the rim and 0.262 a third of the
     // way up the column, so the whole plume sits at one depth and needs only one number.
     disparity: 0.263,
+  },
+  {
+    id: 'feeder-lens',
+    kind: 'glow',
+    /**
+     * BirdLense's camera, which really is painted into the master — a dark module set back
+     * inside the feeder box, visible through the window between two mullions. So this is not
+     * a light invented and stuck onto the art; it is the light the thing in the picture
+     * would actually be showing.
+     *
+     * Measured off a 2.2x crop of the feeder's `wakeRect`. Backdrop headroom is good: the
+     * housing is the darkest surface in that window, which is what `screen` needs (see the
+     * prism note above — that is the effect that died for want of it).
+     *
+     * PLAN.md already wanted this for the night variant, where the window would otherwise go
+     * black and read as dead. Building it for day means night is a tuning change rather than
+     * a new effect.
+     */
+    rect: [0.2785, 0.3734, 0.2870, 0.3992],
+    // The feeder's own hotspot disparity: 8.31m. The window plane reading is contaminated by
+    // the fig leaf crossing in front, which is why that number is authored there too.
+    disparity: 0.116,
+    accent: 'var(--accent-birdlense)',
+  },
+  {
+    id: 'rover-status',
+    kind: 'glow',
+    /**
+     * The indicator cluster on the rover's front panel — the round port and the two slots
+     * below the deck, measured off a 1.54x crop of its `wakeRect`.
+     *
+     * Slower than the feeder's, and it breathes rather than blinking: the feeder is a camera
+     * taking a frame, the rover is a machine idling. Same effect, different cadence, and the
+     * cadence is what stops two lights in one room reading as one animation applied twice.
+     *
+     * The rover has no focus state yet, and it lights anyway — deliberately. PLAN.md wants
+     * the room populated with things that are visible before they are finished, and a room
+     * where you can tell something is alive before you can enter it is exactly right.
+     */
+    rect: [0.5026, 0.8592, 0.5220, 0.8749],
+    // 3.18m, and clean — the rover sits in open floor with nothing crossing in front of it.
+    disparity: 0.317,
+    accent: 'var(--accent-robotrail)',
+  },
+  {
+    id: 'monitor-glow',
+    kind: 'glow',
+    /**
+     * The ultrawide's own glow, wobbling very slightly — a screen that is on rather than a
+     * screen that is painted.
+     *
+     * The screen rect itself, from hotspots.ts — but it is the light's *source*, not its
+     * extent. The first version painted the rect: a screen-blended rectangle, inset 0, with a
+     * 4px corner radius, which is a box of added colour with a visible step at every edge. A
+     * monitor's light does not stop at the bezel; it lands on the desk and the wall behind
+     * it. The glow now blooms well past this rect and falls to nothing before it gets there,
+     * so there is no edge to see (room.css, `--bloom`).
+     *
+     * It has more `screen`-blend headroom than anything else in the room: PROMPTS.md keeps
+     * content off the painted screen, so it is a near-black rectangle with a teal spill.
+     *
+     * Amplitude is still the lowest of the three per unit area — this surface is ~750x an
+     * indicator — but the *peak* is higher than the flat fill's was, because a radial falloff
+     * only reaches full strength at one point.
+     */
+    rect: [0.6434, 0.3981, 0.8011, 0.5254],
+    // 4.51m. A flat frontal panel is the easiest thing in the room to get a depth reading on.
+    disparity: 0.221,
+    accent: 'var(--accent-flowlab)',
   },
 ];
