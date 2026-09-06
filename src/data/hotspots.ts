@@ -175,7 +175,12 @@ export const HOTSPOTS: readonly Hotspot[] = [
   {
     id: 'robot',
     label: 'the rover',
-    href: '/#robotrail',
+    // A real page, not an anchor — same move BirdLense made, and for a sharper reason. This
+    // used to be `/#robotrail`, pointing into a section of the home document; that section
+    // was a second showcase competing with the room and it is gone, so the paragraph moved
+    // to a page of its own. A destination whose only URL is a fragment of a page that no
+    // longer has it is exactly what rule 2 exists to prevent.
+    href: '/robotrail',
     accent: 'var(--accent-robotrail)',
     rect: [0.4459, 0.7516, 0.5509, 0.9102],
     wake: '/art/wake-robot.webp',

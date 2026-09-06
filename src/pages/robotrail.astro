@@ -1,0 +1,143 @@
+---
+/**
+ * RoboTrail's real page (CLAUDE.md rule 2), and the rover hotspot's `href`.
+ *
+ * **It exists because the index document stopped carrying project prose.** The rover used
+ * to point at `/#robotrail`, an anchor into a section of the home page — which was fine
+ * until that section was removed for being a second showcase competing with the room. A
+ * destination without a URL that stands up on its own is the one thing rule 2 does not
+ * allow, so the paragraph moved here rather than being deleted.
+ *
+ * **It is a stub, and it says so.** The project is real and the facts below are the ones
+ * the repo and CLAUDE.md actually state; what does not exist yet is the write-up, the
+ * pictures and the map. `status: building` is therefore true, and this page is the honest
+ * version of "not finished" — a page that exists, is crawlable, and does not pretend. The
+ * room's own placeholder (RoverFocus.tsx) says the same thing in the dark palette's voice.
+ *
+ * Mirrors `/birdlense` in structure and styling on purpose: same top-level position (both
+ * are *physical* things with room addresses, so neither belongs under /software), same
+ * `.project-page` shell, this destination's own accent. When the write-up lands, this file
+ * grows a `src/data/robotrail.ts` the way BirdLense has one, and the room's placeholder
+ * reads from it — one module, two surfaces, no drift.
+ */
+import '../styles/tokens.css';
+
+const title = 'RoboTrail — Alex Rogachev';
+const description = 'A tracked rover that maps where it has been: graph SLAM on a '
+  + 'Raspberry Pi, closing loops against its own odometry.';
+
+/** The same four the room's placeholder shows, and every one is stated in CLAUDE.md. */
+const FACTS: readonly [string, string][] = [
+  ['form', 'tracked rover'],
+  ['platform', 'raspberry pi'],
+  ['mapping', 'graph slam'],
+  ['closes on', 'its own odometry'],
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+  </head>
+  <body class="project-page" style={{ '--accent': 'var(--accent-robotrail)' }}>
+    <main>
+      <p class="crumb"><a href="/">← the room</a></p>
+
+      <header class="head">
+        <h1>RoboTrail</h1>
+        <p class="status">
+          <span class="status__dot" aria-hidden="true"></span>
+          building
+          <span class="status__sep">·</span>
+          Graph SLAM · Raspberry Pi
+        </p>
+      </header>
+
+      <p class="lede">
+        A tracked rover that builds a map of where it has been. It drives, keeps a graph of
+        the poses it thinks it passed through, and corrects the whole graph against its own
+        odometry when it arrives somewhere it has been before.
+      </p>
+
+      <dl class="rail">
+        {FACTS.map(([k, v]) => (
+          <div><dt>{k}</dt><dd>{v}</dd></div>
+        ))}
+      </dl>
+
+      {/* The admission, and it is the whole point of shipping this page early: the rover has
+          a room address and a focus state, so it needs a URL that resolves. Saying "not yet"
+          on a real page beats a hotspot that leads nowhere. */}
+      <p class="note">
+        The write-up, the maps it has made and the source are still to come. The rover is on
+        the floor of the room above in the meantime.
+      </p>
+    </main>
+
+    <style>
+      /* Matches src/pages/birdlense.astro and src/pages/software/flowlab.astro: a visitor
+       * who lands on any of them without going through the room should recognise them as
+       * the same kind of surface — the dark half of the palette, one accent. */
+      .project-page {
+        background: var(--focus-bg);
+        color: var(--focus-ink);
+        min-height: 100svh;
+      }
+      main { max-width: 76ch; margin: 0 auto; padding: 48px 24px 96px; }
+
+      .crumb { font: 12px/1 var(--font-mono); color: var(--focus-ink-soft); margin: 0 0 32px; }
+      .crumb a { color: var(--accent); text-decoration: none; }
+      .crumb a:hover { text-decoration: underline; }
+
+      .head { margin: 0 0 0.5em; }
+      h1 { font-size: 1.75rem; margin: 0 0 0.3em; }
+
+      .status {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 0;
+        font: 12px/1.4 var(--font-mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--focus-ink-soft);
+      }
+      /* Hollow rather than filled, which is the one deliberate difference from /birdlense.
+       * That page's dot is solid because its status is `live`; this one is `building`, and a
+       * ring reads as pending without needing a second colour token. */
+      .status__dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        border: 1.5px solid var(--accent);
+      }
+      .status__sep { opacity: 0.5; }
+
+      .lede { color: var(--focus-ink-soft); font-size: 1.05rem; margin: 20px 0 40px; }
+
+      .rail {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 18px;
+        margin: 36px 0 44px;
+        padding: 18px 0;
+        border-top: 1px solid var(--focus-line);
+        border-bottom: 1px solid var(--focus-line);
+        font: 12px/1.5 var(--font-mono);
+        letter-spacing: 0.08em;
+      }
+      .rail > div { display: contents; }
+      .rail dt { color: var(--focus-ink-soft); text-transform: uppercase; }
+      .rail dd { margin: 0; }
+
+      .note { margin: 0; color: var(--focus-ink-soft); line-height: 1.65; }
+    </style>
+  </body>
+</html>

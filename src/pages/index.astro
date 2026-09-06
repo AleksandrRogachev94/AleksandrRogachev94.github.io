@@ -3,13 +3,14 @@ import '../styles/tokens.css';
 import '../styles/room.css';
 import Room from '../components/Room.tsx';
 import { SCENE } from '../data/scene';
+import { SITE, ROOM_LINKS, ELSEWHERE } from '../data/site';
 
 // The room is one screenful at the top of a real page — it is not a replacement for the
-// document and never hides it. Scroll past the room and the prose below is the same
-// content the hotspots navigate to, server-rendered: the SEO layer, the screen-reader
-// layer and the no-JS fallback, all at once (CLAUDE.md rule 2).
-const title = 'Alex Rogachev';
-const description = 'Software, computer vision, and things built indoors.';
+// document and never hides it. What is below is deliberately *not* a text copy of the room:
+// it is who the site is about, plus the links that make every destination crawlable and
+// reachable with JS off (CLAUDE.md rule 2). See the note above <main>.
+const title = SITE.name;
+const description = SITE.tagline;
 ---
 
 <!doctype html>
@@ -36,38 +37,56 @@ const description = 'Software, computer vision, and things built indoors.';
   <body>
     <Room client:load />
 
+    {/*
+      **The document, and it is about the person — not a second copy of the room.**
+
+      It used to carry a `<section>` of prose for each of the three destinations, which was
+      a second showcase competing with the one above it. The room is the navigation; a text
+      list of the same places restating pages that already exist can only ever lose to it,
+      and it gave every project a second address — the exact thing projects.ts forbids.
+
+      What could NOT go is the links. The room's hotspots are real `<a href>` elements, but
+      they are positioned from a viewport measurement taken in a `useEffect`, so they do not
+      exist during Astro's prerender: `<div class="hotspots">` ships empty. These three links
+      are the only crawlable path to /software, /birdlense and /robotrail, and the only way
+      to reach them with JS off. So they stay — as one sentence, which is a table of
+      contents rather than a showcase, and which doubles as the only explanation a no-JS
+      visitor gets of what the rectangle above them was.
+    */}
     <main class="doc">
       <h1>{title}</h1>
       <p class="doc__lede">{description}</p>
 
-      <section id="software">
-        <h2>The software bench</h2>
-        <p>
-          Things that exist only as code live on the monitor. It is not one project — it is
-          a bench that several sit on, each with its own page.
-        </p>
-        <p><a href="/software">Open the software bench →</a></p>
-      </section>
+      <p>
+        I&rsquo;m a full-stack web developer at Holman, where I work on AI and machine
+        learning as well. I finished Georgia Tech&rsquo;s OMSCS a few years ago, and
+        I&rsquo;m based near Philadelphia.
+      </p>
 
-      <section id="birdlense">
-        <h2>BirdLense</h2>
-        <p>
-          A smart bird feeder in the yard outside the window: a two-stage YOLO detector with
-          ByteTrack for tracking, BirdNET for the calls, and a Raspberry Pi doing all of it
-          without sending anything to the cloud. It is a physical thing, so it has a physical
-          address in the room.
-        </p>
-        <p><a href="/birdlense">Look through the window →</a></p>
-      </section>
+      <p>
+        Most of what I build outside work ends up being software that has to run somewhere
+        specific &mdash; a browser&rsquo;s GPU, or a Raspberry Pi in a yard &mdash; which is
+        the constraint I find most interesting.
+      </p>
 
-      <section id="robotrail">
-        <h2>RoboTrail</h2>
-        <p>
-          A tracked rover that builds a map of where it has been: graph SLAM running on a
-          Raspberry Pi, closing loops against its own odometry. Like BirdLense it is a
-          physical thing, so it sits on the floor rather than on the monitor.
-        </p>
-      </section>
+      <p>
+        The room above is the site. Everything in it is something I actually own or built:
+        the monitor is <a href={ROOM_LINKS.bench.href}>{ROOM_LINKS.bench.label}</a>, the
+        window looks out on <a href={ROOM_LINKS.birdlense.href}>{ROOM_LINKS.birdlense.label}</a>,
+        and the rover on the floor is <a href={ROOM_LINKS.robotrail.href}>{ROOM_LINKS.robotrail.label}</a>.
+        Clicking one in the room pushes the camera into it; the links here are the same
+        places as ordinary pages.
+      </p>
+
+      <p class="doc__elsewhere">
+        {ELSEWHERE.map((l) => (
+          <a
+            href={l.href}
+            target={l.external ? '_blank' : undefined}
+            rel={l.external ? 'noopener' : undefined}
+          >{l.label}{l.external ? ' \u2197' : ''}</a>
+        ))}
+      </p>
 
       {/*
         The colophon, and it is on this page only — deliberately. The loop plays in the room,
@@ -88,16 +107,76 @@ const description = 'Software, computer vision, and things built indoors.';
     </main>
 
     <style>
+      /* ---- the scroll ---------------------------------------------------------
+       * **Two screens, and the page commits to that rather than hedging.** The room is one
+       * panel, this document is the other, and any scroll flips fully between them — no
+       * resting position that shows the bottom of a painterly room above the top of a text
+       * page, which is the ugliest state this layout can produce.
+       *
+       * **Why `mandatory` here, when the usual advice is `proximity`.** That advice exists
+       * for one specific failure: a snap panel *taller than the viewport* can fight or trap
+       * someone trying to reach its bottom. It is a rule about oversized panels, not a rule
+       * against snapping. So the fix is not to weaken the snap — it is to snap only where
+       * both panels genuinely fit, and the media query below is exactly that guard. Above it
+       * the document is ~550px of content in a 700px+ viewport and `mandatory` is safe and
+       * decisive; below it there is no snapping at all and the page scrolls like any other.
+       *
+       * **This constrains the document, on purpose.** The about panel has to keep fitting a
+       * screen. If it ever grows past that, this is the block to revisit — do not fix it by
+       * letting a too-tall panel snap.
+       *
+       * Snapping is scrolling the visitor did not ask for, so reduced motion turns it off
+       * entirely rather than softening it. */
+      @media (min-width: 768px) and (min-height: 700px) {
+        :global(html) { scroll-snap-type: y mandatory; }
+        /* Neither panel can be flicked past. With only two stops this rarely fires, but a
+         * fast wheel on a trackpad can otherwise overshoot the document entirely. */
+        :global(.room),
+        .doc { scroll-snap-stop: always; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        :global(html) { scroll-snap-type: none; }
+      }
+
+      /* Stated unconditionally: an alignment costs nothing when no snap type is in force, and
+       * keeping it out of the media query leaves the guard above with one job. */
+      :global(.room) { scroll-snap-align: start; }
+
       .doc {
+        scroll-snap-align: start;
+        /* A real second screen, which is what makes the snap honest — a stop that lands on a
+         * panel shorter than the viewport leaves dead space below it and reads as broken.
+         * `safe center` rather than plain centring: on a viewport too short for the content
+         * (where snapping is off anyway) true centring would clip the top instead of letting
+         * it scroll. Same reason `.deck__body` and `.bay__read` use it. */
+        min-height: 100svh;
+        display: flex;
+        flex-direction: column;
+        justify-content: safe center;
         max-width: 62ch;
         margin: 0 auto;
-        padding: 64px 24px 96px;
+        padding: 64px 24px;
       }
       .doc h1 { font-size: 2rem; margin: 0 0 0.25em; }
       .doc__lede { color: var(--room-ink-soft); font-size: 1.1rem; margin-top: 0; }
-      .doc section { margin-top: 48px; }
-      .doc h2 { font-size: 1.25rem; margin: 0 0 0.4em; }
+      /* `.doc section` and `.doc h2` used to be here, for the three project sections. There
+       * is no second heading level on this page any more — which is the correct outline for
+       * what it now is: one page about one person. */
+      .doc p { line-height: 1.65; margin: 0 0 1.1em; }
       .doc a { color: var(--room-ink); text-underline-offset: 3px; }
+
+      /* Named links at prose size, not a row of icons. A wall of monochrome social glyphs is
+       * the most generic thing a portfolio can wear, and this site's whole argument is that
+       * it is not that (see ELSEWHERE in src/data/site.ts). */
+      /* Two classes deep on purpose: this is a `<p>`, so the `.doc p` rule above (0,1,1)
+       * outranks a lone `.doc__elsewhere` (0,1,0) and would flatten the margin to zero. */
+      .doc .doc__elsewhere {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 20px;
+        margin-top: 32px;
+      }
       .doc__colophon {
         margin-top: 64px;
         padding-top: 24px;

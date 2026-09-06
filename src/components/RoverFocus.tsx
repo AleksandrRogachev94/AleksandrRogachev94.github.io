@@ -53,7 +53,7 @@ interface Props {
 /**
  * Facts about the machine, in the dark palette's voice — mono, measured, no adjectives.
  *
- * **Every line is one the document downstairs already makes** (index.astro's `#robotrail`,
+ * **Every line is one the project's own page already makes** (src/pages/robotrail.astro,
  * and CLAUDE.md's note on `../robot`). A first draft of this list said "differential drive"
  * and "odometry + imu", and neither is written down anywhere — they were guesses that
  * *sounded* like a rover. The rest of this site is built on the rule that the dark palette
@@ -127,7 +127,7 @@ export default function RoverFocus({ hotspot, open, atMs, lastInputRef, onExit }
         <p className="bay__note">The map, and the write-up it belongs to, are still being built.</p>
 
         <p className="field__links">
-          <a href={hotspot.href}>what it is, for now &rarr;</a>
+          <a href={hotspot.href}>the page, such as it is &rarr;</a>
         </p>
       </div>
     </div>

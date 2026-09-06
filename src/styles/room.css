@@ -195,6 +195,86 @@
  * screen is the room and not a full-width line under it. */
 .room__still--gone ~ .room__load { opacity: 0; }
 
+/* ---- the title card -------------------------------------------------------
+ * Who this is, and what the room is for, over the wait that already exists.
+ *
+ * **The distinction it is built around: it does not gate.** Splash screens people have to
+ * click through are a well-earned bad reputation — they are dismissed reflexively, teach
+ * nothing, and delay the thing they are describing. This is the other pattern: it occupies
+ * time the visitor is spending anyway (8.9MB of splats), leaves on its own a beat after the
+ * room is ready, and the first deliberate input of any kind removes it early (Room.tsx). No
+ * button, no "enter", nothing to get past. `pointer-events: none` guarantees it can never
+ * be the thing a click lands on, including mid-fade.
+ *
+ * **Warm, not dark** — rule 4. It sits on the room, so it belongs to the room's half of the
+ * palette; the near-black-plus-accent language is what a focus state is, and dressing a
+ * title card in it would promise a destination that is not coming.
+ *
+ * Bottom-left, above the load bar, rather than centred. A centred block over a painterly
+ * room *is* a splash screen visually even when it does not behave like one — it covers the
+ * subject and asks to be read before anything else. Down in the corner it reads as a title
+ * card: present, legible, and not in the way of the picture it is naming. */
+.room__intro {
+  position: absolute;
+  left: clamp(20px, 4vw, 56px);
+  /* Clear of `.room__load`, which owns the very bottom edge. */
+  bottom: clamp(28px, 6vh, 64px);
+  max-width: min(46ch, 72vw);
+  pointer-events: none;
+
+  /* The art behind this is warm, mid-toned, and different in every variant (day, night, four
+   * seasons), so legibility cannot rest on the picture happening to be dark here. Warm white
+   * on a soft scrim — the technique `.field__scrim` uses on the other palette, in this
+   * palette's colours.
+   *
+   * A *radial* scrim with negative margins, not a panel: it carries its own falloff and
+   * reads as light pooling in the corner, which is the room's own vocabulary. A hard-edged
+   * box behind the words would be chrome, and the room does not wear chrome. The margins
+   * cancel the padding so the text sits exactly where the offsets above put it. */
+  padding: 30px 40px;
+  margin: -30px -40px;
+  background: radial-gradient(
+    115% 130% at 22% 78%,
+    color-mix(in srgb, var(--room-shade) 60%, transparent) 0%,
+    color-mix(in srgb, var(--room-shade) 34%, transparent) 42%,
+    transparent 72%
+  );
+  text-shadow: 0 1px 12px color-mix(in srgb, var(--room-shade) 70%, transparent);
+  /* Duration must stay in step with INTRO_FADE_MS in Room.tsx, which is how long the element
+   * stays mounted after `--going` lands. */
+  transition: opacity 450ms ease, transform 450ms ease;
+}
+
+/* Leaving. It lifts very slightly as it goes — the same direction the camera travels on a
+ * push, so the card clears the frame rather than dissolving in place. */
+.room__intro--going {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.room__intro-name {
+  margin: 0 0 6px;
+  font-size: clamp(1.25rem, 2.4vw, 1.75rem);
+  line-height: 1.1;
+  color: var(--room-ink-over);
+}
+
+/* The instruction, and it is one sentence because two would be a tour. It says what the
+ * objects *are* rather than naming them: the room already names them on hover, and a card
+ * that lists the destinations is the text navigation this site deliberately does not have. */
+.room__intro-line {
+  margin: 0;
+  font-size: clamp(0.8125rem, 1.4vw, 0.9375rem);
+  line-height: 1.5;
+  color: var(--room-ink-over-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Room.tsx already collapses both timers to zero here, so the card is never shown at all.
+   * This is belt and braces: no transition means nothing can be caught mid-fade. */
+  .room__intro { transition: none; }
+}
+
 /* Once a focus panel is fully open (not mid-push/pull, when the canvas still has to draw),
  * the room is not just paused (roomRenderer.stop() above), it is taken out of the paint tree
  * entirely. `.room__canvas`'s own `filter` above forces it onto its own composited GPU
@@ -744,10 +824,13 @@
 
 /* The floor is high enough that the light never quite goes out — the breath is a machine on
  * standby, not a machine blinking. Against warm plaster the bottom of the swing is a faint
- * cool point and the top is unmistakably lit, which is the whole range this needs. */
+ * cool point and the top is unmistakably lit, which is the whole range this needs.
+ *
+ * 0.40 -> 0.92 read as barely-there in practice: on a ~16px point light the swing has to
+ * carry the whole effect, since (unlike `--core`/`--bloom`) size stays fixed on purpose. */
 @keyframes led-standby {
-  0%, 100% { opacity: 0.40; }
-  50%      { opacity: 0.92; }
+  0%, 100% { opacity: 0.18; }
+  50%      { opacity: 1; }
 }
 
 /* **Switching on is a snap, not a fade**, and this replaced a 260ms ease that made pressing
@@ -872,9 +955,16 @@
    * can afford that pause because it is a machine powering on and the pause is part of the
    * fiction. Nothing is powering on here.
    *
-   * The words follow the picture by a beat, which is the only stagger left — and on the
-   * rover, where there is no picture yet, they follow the black by the same beat. */
+   * The words follow the picture by a beat, which is the only stagger left. */
   --t1: calc(var(--t0) + 320ms);
+}
+
+/* The rover has no picture to follow, so borrowing the feed's 320ms + 110ms wait (below)
+ * bought nothing but a longer stretch of plain black — the feed's version of that wait is
+ * masked by the photo visibly exposing underneath it; the rover's is not masked by anything.
+ * A short settle beat, not the feed's exposure-length one. */
+.focus--rover {
+  --t1: calc(var(--t0) + 90ms);
 }
 
 /* 1ms is a cut, not a fade. Written as an animation rather than a plain rule because `both`

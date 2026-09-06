@@ -20,6 +20,20 @@
   --room-amber: #f0b95e;      /* the practicals: lamp, fairy lights, monitor spill */
   --room-daylight: #b9d6e6;   /* cool daylight through the glass */
 
+  /* Text laid *over the art*, rather than on warm paper — a surface the room half of the
+   * palette did not have until the title card needed one. Every other room-coloured word on
+   * this site sits on `--room-bg`, where dark ink is right; over a painterly mid-toned
+   * image that varies by variant (day, night, four seasons) it is unreadable, and no
+   * shadow rescues dark-on-mid.
+   *
+   * **Not `--focus-ink`.** That is the other palette's voice — near-black surface, one
+   * saturated accent — and borrowing it here would dress a warm room in the language rule 4
+   * reserves for destinations. These are warm whites: the room's own light, not a screen's.
+   * `--room-shade` is the soft scrim they sit on, matched to the art's deepest browns. */
+  --room-ink-over: #f7f0e4;
+  --room-ink-over-soft: #dccdb9;
+  --room-shade: #241a12;
+
   /* ---- Focus states: dark -------------------------------------------- */
   --focus-bg: #0a0b0d;
   --focus-surface: #14171b;

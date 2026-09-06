@@ -12,24 +12,34 @@
  * (CLAUDE.md rule 2). Nothing here hides it.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createRoomRenderer, type RoomRenderer } from '../scripts/roomRenderer';
-import { createSplatRenderer } from '../scripts/splatRenderer';
-import { createCameraRig, pushTimeFor, type CameraRig } from '../scripts/cameraRig';
-import { parallaxCoeff, imageRectToScreen, pushedRectToScreen, type ScreenRect } from '../scripts/roomGeometry';
-import { TRANSITION, TRANSITION_VARS } from '../scripts/transition';
-import { HOTSPOTS, hotspotById, type Hotspot } from '../data/hotspots';
-import { CONTROLS } from '../data/controls';
-import { SCENE } from '../data/scene';
-import type { Project } from '../data/projects';
-import { createRoomAudio, type RoomAudio } from '../scripts/roomAudio';
-import HotspotButton from './Hotspot';
-import RoomControlButton from './RoomControl';
-import { useLastInput } from './useLastInput';
-import Ambient from './Ambient';
-import MonitorFocus from './MonitorFocus';
-import WindowFocus from './WindowFocus';
-import RoverFocus from './RoverFocus';
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createRoomRenderer, type RoomRenderer } from "../scripts/roomRenderer";
+import { createSplatRenderer } from "../scripts/splatRenderer";
+import {
+  createCameraRig,
+  pushTimeFor,
+  type CameraRig,
+} from "../scripts/cameraRig";
+import {
+  parallaxCoeff,
+  imageRectToScreen,
+  pushedRectToScreen,
+  type ScreenRect,
+} from "../scripts/roomGeometry";
+import { TRANSITION, TRANSITION_VARS } from "../scripts/transition";
+import { HOTSPOTS, hotspotById, type Hotspot } from "../data/hotspots";
+import { CONTROLS } from "../data/controls";
+import { SCENE } from "../data/scene";
+import { SITE } from "../data/site";
+import type { Project } from "../data/projects";
+import { createRoomAudio, type RoomAudio } from "../scripts/roomAudio";
+import HotspotButton from "./Hotspot";
+import RoomControlButton from "./RoomControl";
+import { useLastInput } from "./useLastInput";
+import Ambient from "./Ambient";
+import MonitorFocus from "./MonitorFocus";
+import WindowFocus from "./WindowFocus";
+import RoverFocus from "./RoverFocus";
 
 /** Which build's plates to load, and the numbers they were measured with. */
 const LAYERS = SCENE.layers ?? [];
@@ -85,7 +95,7 @@ const cutMsFor = (h: Hotspot) =>
  * opt in to the screen one, which is the right way round — the feeder inheriting the
  * monitor's grammar by accident is the bug this encodes against.
  */
-const cuts = (h: Hotspot) => h.focusState !== 'bench';
+const cuts = (h: Hotspot) => h.focusState !== "bench";
 
 /**
  * When this destination's panel is opaque, and therefore when the room can stop drawing.
@@ -116,7 +126,28 @@ const coverMsFor = (h: Hotspot) =>
  */
 const POSTER_FADE_MS = 700;
 
-type Phase = 'idle' | 'entering' | 'live' | 'leaving';
+/**
+ * How long the title card stays *after* the room is ready to draw.
+ *
+ * **The whole design is in this one number being a hold rather than a deadline.** The card
+ * exists because 8.9MB of splats is dead time the visitor spends looking at a room with no
+ * explanation and no name on it — and dead time you have to spend anyway is the one honest
+ * place to put orientation. But tying it to "gone when loaded" makes it useless in the case
+ * that matters most: a repeat visit with everything cached, where it would flash past in
+ * 80ms and teach nobody anything. Holding a beat past ready costs a first-time visitor
+ * nothing (they waited seconds already) and is the entire value on a warm cache.
+ *
+ * It is emphatically **not** a gate. Nothing has to be dismissed, nothing is waiting on a
+ * click, and the first deliberate input of any kind removes it early (see the effect below).
+ * Splash screens people must click through are the pattern this is avoiding, not the
+ * pattern it is.
+ */
+const INTRO_HOLD_MS = 2000;
+
+/** How long the card takes to leave. Must match `.room__intro`'s transition in room.css. */
+const INTRO_FADE_MS = 450;
+
+type Phase = "idle" | "entering" | "live" | "leaving";
 
 export default function Room() {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -136,7 +167,7 @@ export default function Room() {
   const [aspect, setAspect] = useState(ART_ASPECT);
   const [view, setView] = useState({ w: 0, h: 0 });
   const [focus, setFocus] = useState<Hotspot | null>(null);
-  const [phase, setPhase] = useState<Phase>('idle');
+  const [phase, setPhase] = useState<Phase>("idle");
   // A second, nested level inside the monitor's focus state: which project (if any) has
   // been launched from the bench grid. Lives here rather than inside MonitorFocus because
   // Esc has to know about it — the first Esc inside a project steps back to the grid, and
@@ -169,13 +200,15 @@ export default function Room() {
 
   // The rAF callback and the observers need the current phase without being re-created
   // every time it changes, so it is mirrored into a ref.
-  const phaseRef = useRef<Phase>('idle');
+  const phaseRef = useRef<Phase>("idle");
   phaseRef.current = phase;
   const focusRef = useRef<Hotspot | null>(null);
   focusRef.current = focus;
 
   const reduced = useMemo(
-    () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches,
+    () =>
+      typeof matchMedia !== "undefined" &&
+      matchMedia("(prefers-reduced-motion: reduce)").matches,
     [],
   );
 
@@ -202,7 +235,7 @@ export default function Room() {
       if (!rig || !renderer) return;
       rig.update(dt);
       const push = rig.progress();
-      root.style.setProperty('--push', push.toFixed(3));
+      root.style.setProperty("--push", push.toFixed(3));
 
       // The veil, resolved here rather than in CSS. Its schedule is per destination now
       // (hotspots.ts), which makes the CSS expression need a start, a slope and clamps at
@@ -210,7 +243,7 @@ export default function Room() {
       // above `.room--busy .room__canvas`.
       const { start, full } = veilRef.current;
       const t = Math.min(1, Math.max(0, (push - start) / (full - start)));
-      root.style.setProperty('--veil-t', t.toFixed(3));
+      root.style.setProperty("--veil-t", t.toFixed(3));
 
       // **The ambient layer comes back when the camera is home, not when the panel clears.**
       // Those are 550ms apart: `.room--busy` is dropped at `closeMs` (200ms), because that
@@ -233,46 +266,54 @@ export default function Room() {
       const transit = push > 0;
       if (transit !== inTransit) {
         inTransit = transit;
-        root.toggleAttribute('data-transit', transit);
+        root.toggleAttribute("data-transit", transit);
       }
       // Keep the hotspots glued to their objects while the room parallaxes under them.
       // Two numbers for the whole layer; each hotspot scales them by its own 1/z in CSS.
       const k = parallaxCoeff(
         renderer.camera.eye[0] - renderer.home.eye[0],
         renderer.camera.eye[1] - renderer.home.eye[1],
-        canvas.clientWidth, canvas.clientHeight,
+        canvas.clientWidth,
+        canvas.clientHeight,
         { fovDeg: SCENE.fovDeg, imageAspect: renderer.imageAspect },
       );
-      root.style.setProperty('--par-x', k.kx.toFixed(2));
-      root.style.setProperty('--par-y', k.ky.toFixed(2));
+      root.style.setProperty("--par-x", k.kx.toFixed(2));
+      root.style.setProperty("--par-y", k.ky.toFixed(2));
     };
 
     // Both renderers satisfy the same interface, so nothing below this line — the rig, the
     // stage manager, the hotspots — knows which build is mounted. See src/data/scene.ts.
-    const created = SCENE.kind === 'splat'
-      ? createSplatRenderer({
-        canvas,
-        assetPrefix: SCENE.assetPrefix!,
-        onBeforeFrame,
-        // Straight onto the element as a custom property, not through React state. This
-        // fires once per network chunk — dozens of times over a few seconds — and all it
-        // ever does is set the width of one bar.
-        onProgress: (f) => root.style.setProperty('--load', f.toFixed(3)),
-      })
-      : createRoomRenderer({
-        canvas,
-        layers: LAYERS,
-        // The reconstruction has to be the same shape as the room the rig aims into.
-        fovDeg: SCENE.fovDeg,
-        nearZ: SCENE.nearZ,
-        farZ: SCENE.farZ,
-        onBeforeFrame,
-      });
+    const created =
+      SCENE.kind === "splat"
+        ? createSplatRenderer({
+            canvas,
+            assetPrefix: SCENE.assetPrefix!,
+            onBeforeFrame,
+            // Straight onto the element as a custom property, not through React state. This
+            // fires once per network chunk — dozens of times over a few seconds — and all it
+            // ever does is set the width of one bar.
+            onProgress: (f) => root.style.setProperty("--load", f.toFixed(3)),
+          })
+        : createRoomRenderer({
+            canvas,
+            layers: LAYERS,
+            // The reconstruction has to be the same shape as the room the rig aims into.
+            fovDeg: SCENE.fovDeg,
+            nearZ: SCENE.nearZ,
+            farZ: SCENE.farZ,
+            onBeforeFrame,
+          });
 
     created
       .then((r) => {
-        if (disposed) { r?.destroy(); return; }
-        if (!r) { setWebgl(false); return; }
+        if (disposed) {
+          r?.destroy();
+          return;
+        }
+        if (!r) {
+          setWebgl(false);
+          return;
+        }
         renderer = r;
         rig = createCameraRig(r, r.imageAspect);
         rendererRef.current = r;
@@ -283,7 +324,9 @@ export default function Room() {
         // arrived — is there something on the canvas worth uncovering.
         setDrawable(true);
       })
-      .catch(() => { if (!disposed) setWebgl(false); });
+      .catch(() => {
+        if (!disposed) setWebgl(false);
+      });
 
     return () => {
       disposed = true;
@@ -308,7 +351,10 @@ export default function Room() {
     const audio = createRoomAudio();
     audioRef.current = audio;
     if (audio.remembered()) void audio.toggle().then(setAudioOn);
-    return () => { audio.dispose(); audioRef.current = null; };
+    return () => {
+      audio.dispose();
+      audioRef.current = null;
+    };
   }, []);
 
   const toggleAudio = useCallback(() => {
@@ -320,7 +366,8 @@ export default function Room() {
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    const measure = () => setView({ w: root.clientWidth, h: root.clientHeight });
+    const measure = () =>
+      setView({ w: root.clientWidth, h: root.clientHeight });
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(root);
@@ -341,7 +388,7 @@ export default function Room() {
         const r = rendererRef.current;
         if (!r) return;
         if (!entry.isIntersecting) r.stop();
-        else if (phaseRef.current === 'idle') r.start();
+        else if (phaseRef.current === "idle") r.start();
       },
       { threshold: 0.01 },
     );
@@ -351,30 +398,36 @@ export default function Room() {
 
   // ---- entering and leaving a focus state ----------------------------------
 
-  const enter = useCallback((h: Hotspot) => {
-    const rig = rigRef.current;
-    // No rig means no approach — the no-WebGL path is a still image, and there is no camera
-    // to move. The takeover's delay exists to trail a push, so without one it is just dead
-    // air over a photograph. Cut instead, the same way reduced motion does.
-    const noApproach = reduced || !rig;
+  const enter = useCallback(
+    (h: Hotspot) => {
+      const rig = rigRef.current;
+      // No rig means no approach — the no-WebGL path is a still image, and there is no camera
+      // to move. The takeover's delay exists to trail a push, so without one it is just dead
+      // air over a photograph. Cut instead, the same way reduced motion does.
+      const noApproach = reduced || !rig;
 
-    // Arm this destination's own veil schedule before the camera starts. How fast the room
-    // has to fall away is a fact about the object being approached — what the reconstruction
-    // has for it, and how hard the push magnifies it — so it is authored per hotspot rather
-    // than being one curve for the whole room.
-    veilRef.current = h.veil ?? DEFAULT_VEIL;
+      // Arm this destination's own veil schedule before the camera starts. How fast the room
+      // has to fall away is a fact about the object being approached — what the reconstruction
+      // has for it, and how hard the push magnifies it — so it is authored per hotspot rather
+      // than being one curve for the whole room.
+      veilRef.current = h.veil ?? DEFAULT_VEIL;
 
-    rig?.pushToImagePoint(h.aim[0], h.aim[1], h.disparity, h.travel);
-    setFocus(h);
-    setPhase('entering');
-    clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => {
-      setPhase('live');
-      // Only now, with the panel opaque, is it safe to stop drawing. Doing it earlier
-      // freezes the last frame of the push in plain sight.
-      rendererRef.current?.stop();
-    }, noApproach ? 0 : coverMsFor(h));
-  }, [reduced]);
+      rig?.pushToImagePoint(h.aim[0], h.aim[1], h.disparity, h.travel);
+      setFocus(h);
+      setPhase("entering");
+      clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(
+        () => {
+          setPhase("live");
+          // Only now, with the panel opaque, is it safe to stop drawing. Doing it earlier
+          // freezes the last frame of the push in plain sight.
+          rendererRef.current?.stop();
+        },
+        noApproach ? 0 : coverMsFor(h),
+      );
+    },
+    [reduced],
+  );
 
   const leave = useCallback(() => {
     // Both at once, and in this order. The room has to be drawing again *before* the panel
@@ -386,26 +439,33 @@ export default function Room() {
     // already happened by the time you could see it.
     rendererRef.current?.start();
     rigRef.current?.release();
-    setPhase('leaving');
+    setPhase("leaving");
     clearTimeout(timerRef.current);
     // Read outside the timer: by the time it fires, `focus` may already be something else.
     const returnTo = focusRef.current;
-    timerRef.current = window.setTimeout(() => {
-      setPhase('idle');
-      setFocus(null);
-      setProject(null);
-      // Put the keyboard back where it came from, or Esc silently drops focus to the top of
-      // the page and the room becomes unreachable without re-tabbing through everything.
-      if (returnTo) document.getElementById(`hotspot-${returnTo.id}`)?.focus();
-    }, reduced ? 0 : UNCOVER_MS);
+    timerRef.current = window.setTimeout(
+      () => {
+        setPhase("idle");
+        setFocus(null);
+        setProject(null);
+        // Put the keyboard back where it came from, or Esc silently drops focus to the top of
+        // the page and the room becomes unreachable without re-tabbing through everything.
+        if (returnTo)
+          document.getElementById(`hotspot-${returnTo.id}`)?.focus();
+      },
+      reduced ? 0 : UNCOVER_MS,
+    );
   }, [reduced]);
 
   /** Activation goes through history, so the browser's back button is the same gesture. */
-  const activate = useCallback((h: Hotspot) => {
-    if (!h.focusState) return;   // Hotspot let the link through; nothing to do here.
-    history.pushState({ hotspot: h.id }, '', h.href);
-    enter(h);
-  }, [enter]);
+  const activate = useCallback(
+    (h: Hotspot) => {
+      if (!h.focusState) return; // Hotspot let the link through; nothing to do here.
+      history.pushState({ hotspot: h.id }, "", h.href);
+      enter(h);
+    },
+    [enter],
+  );
 
   /**
    * Launching a project from the bench grid pushes its own history entry on top of the
@@ -413,20 +473,27 @@ export default function Room() {
    * URL bar reflects it and the back button is still the one gesture that undoes everything,
    * one step at a time.
    */
-  const selectProject = useCallback((p: Project) => {
-    if (!focus) return;
-    history.pushState({ hotspot: focus.id, project: p.id }, '', p.href);
-    setProject(p.id);
-  }, [focus]);
+  const selectProject = useCallback(
+    (p: Project) => {
+      if (!focus) return;
+      history.pushState({ hotspot: focus.id, project: p.id }, "", p.href);
+      setProject(p.id);
+    },
+    [focus],
+  );
 
   const requestExit = useCallback(() => {
-    if (history.state?.hotspot) history.back();  // popstate below does the work
+    if (history.state?.hotspot)
+      history.back(); // popstate below does the work
     else leave();
   }, [leave]);
 
   useEffect(() => {
     const onPop = () => {
-      const state = history.state as { hotspot?: string; project?: string } | null;
+      const state = history.state as {
+        hotspot?: string;
+        project?: string;
+      } | null;
       const next = state?.hotspot ? hotspotById(state.hotspot) : undefined;
       if (next?.focusState) {
         // Already on this hotspot — a project was pushed or popped underneath it, so just
@@ -437,16 +504,19 @@ export default function Room() {
         leave();
       }
     };
-    addEventListener('popstate', onPop);
-    return () => removeEventListener('popstate', onPop);
+    addEventListener("popstate", onPop);
+    return () => removeEventListener("popstate", onPop);
   }, [enter, leave]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && phaseRef.current !== 'idle') { e.preventDefault(); requestExit(); }
+      if (e.key === "Escape" && phaseRef.current !== "idle") {
+        e.preventDefault();
+        requestExit();
+      }
     };
-    addEventListener('keydown', onKey);
-    return () => removeEventListener('keydown', onKey);
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
   }, [requestExit]);
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
@@ -461,10 +531,87 @@ export default function Room() {
   //
   // Kept mounted through the fade and unmounted after, so a decoded full-frame image and
   // its composited layer are not left behind for the whole session.
+  /**
+   * The title card over the poster. Starts up, comes down on its own.
+   *
+   * Deliberately not gated on `webgl`: with no WebGL2 there is no `drawable` and never will
+   * be, so the effect below treats that as "ready now" rather than leaving the card parked
+   * over the static fallback forever.
+   */
+  /**
+   * **Starts false and is switched on after mount, which is the point.** Astro prerenders
+   * this island, so anything `true` at first render ships inside the static HTML — and with
+   * JavaScript off nothing ever hydrates to take it down again. The card would sit there
+   * permanently, over a room whose hotspots were never rendered (they need a viewport
+   * measurement from a `useEffect`), telling a visitor to click objects that do not exist.
+   *
+   * A card that instructs someone to do something has to be sure the something is possible.
+   * Switching it on from an effect makes hydration the precondition, which is exactly the
+   * condition under which the instruction is true. The cost is that it appears a beat into
+   * the load rather than in the first paint; the poster and the load bar already cover that
+   * window, and both are honest with or without JS.
+   */
+  const [intro, setIntro] = useState(false);
+  useEffect(() => {
+    setIntro(true);
+  }, []);
+  /**
+   * Whether the card has *started* leaving, as distinct from being gone. Two flags because
+   * it fades rather than vanishing, and a fade needs the element to still be mounted while
+   * it runs — one boolean would either cut it off hard or leave it mounted and invisible.
+   */
+  const [introGoing, setIntroGoing] = useState(false);
+
+  // Ready, plus a beat. `!drawable && webgl` is the still-loading case, which is exactly
+  // what the card is covering, so the hold does not even start until the room could be shown.
+  useEffect(() => {
+    if (!drawable && webgl) return;
+    const t = window.setTimeout(
+      () => setIntroGoing(true),
+      reduced ? 0 : INTRO_HOLD_MS,
+    );
+    return () => clearTimeout(t);
+  }, [drawable, webgl, reduced]);
+
+  // Any deliberate input takes it down early — a visitor who has started doing something
+  // has, by definition, stopped needing to be told what to do. Pointer *movement* is
+  // excluded on purpose: the room reacts to the cursor at rest (parallax), so a mouse that
+  // merely enters the window is not a decision, and treating it as one would delete the card
+  // before it had been read.
+  useEffect(() => {
+    if (introGoing) return;
+    const go = () => setIntroGoing(true);
+    const events = [
+      "pointerdown",
+      "keydown",
+      "wheel",
+      "touchstart",
+      "scroll",
+    ] as const;
+    for (const e of events) addEventListener(e, go, { passive: true });
+    return () => {
+      for (const e of events) removeEventListener(e, go);
+    };
+  }, [introGoing]);
+
+  // Unmount once the fade has actually run, so a decoded layer is not left over the room
+  // for the rest of the session.
+  useEffect(() => {
+    if (!introGoing) return;
+    const t = window.setTimeout(
+      () => setIntro(false),
+      reduced ? 0 : INTRO_FADE_MS,
+    );
+    return () => clearTimeout(t);
+  }, [introGoing, reduced]);
+
   const [poster, setPoster] = useState(true);
   useEffect(() => {
     if (!drawable) return;
-    const t = window.setTimeout(() => setPoster(false), reduced ? 0 : POSTER_FADE_MS);
+    const t = window.setTimeout(
+      () => setPoster(false),
+      reduced ? 0 : POSTER_FADE_MS,
+    );
     return () => clearTimeout(t);
   }, [drawable, reduced]);
 
@@ -485,16 +632,18 @@ export default function Room() {
   const boxes = useMemo(() => {
     const out = new Map<string, ScreenRect>();
     if (view.w && view.h) {
-      for (const h of HOTSPOTS) out.set(h.id, imageRectToScreen(h.rect, view.w, view.h, aspect));
+      for (const h of HOTSPOTS)
+        out.set(h.id, imageRectToScreen(h.rect, view.w, view.h, aspect));
       // Same crop, same map. The two grammars are separate everywhere the *interaction*
       // differs and identical everywhere it does not, and where a rect lands on the art is
       // not a question about what happens when you click it.
-      for (const c of CONTROLS) out.set(c.id, imageRectToScreen(c.rect, view.w, view.h, aspect));
+      for (const c of CONTROLS)
+        out.set(c.id, imageRectToScreen(c.rect, view.w, view.h, aspect));
     }
     return out;
   }, [view, aspect]);
 
-  const busy = phase !== 'idle';
+  const busy = phase !== "idle";
   /**
    * No push to trail, and nothing for the takeover to grow out of but the art as it is.
    *
@@ -507,21 +656,23 @@ export default function Room() {
   return (
     <div
       ref={rootRef}
-      className={`room ${busy ? 'room--busy' : ''} ${phase === 'live' ? 'room--live' : ''}`}
+      className={`room ${busy ? "room--busy" : ""} ${phase === "live" ? "room--live" : ""}`}
       // The timeline, handed to the stylesheet so the camera and the keyframes cannot
       // disagree about when the camera stops. `--push` is written on this same element
       // every frame by the rig; React only touches the keys it owns, so the two coexist.
       style={TRANSITION_VARS as React.CSSProperties}
       onPointerMove={onPointerMove}
     >
-      {webgl && <canvas ref={canvasRef} className="room__canvas" aria-hidden="true" />}
+      {webgl && (
+        <canvas ref={canvasRef} className="room__canvas" aria-hidden="true" />
+      )}
 
       {/* On top of the canvas until there is something on it, and the *only* thing there is
           when WebGL2 is missing — `drawable` never becomes true on that path, so this never
           fades and the still fallback is unchanged. Degrade explicitly, never silently. */}
       {poster && (
         <img
-          className={`room__canvas room__still ${drawable ? 'room__still--gone' : ''}`}
+          className={`room__canvas room__still ${drawable ? "room__still--gone" : ""}`}
           src={STILL}
           alt=""
           aria-hidden="true"
@@ -534,6 +685,27 @@ export default function Room() {
           than a spinner, and it is driven by real bytes (`--load`), never by a timeline
           guessing at how long a network takes. */}
       {poster && webgl && <div className="room__load" aria-hidden="true" />}
+
+      {/*
+        The title card. **`aria-hidden`, and that is not an oversight** — every word here is
+        already in the document below as real, structured content (the `<h1>` and the prose),
+        so announcing it twice would make a screen reader read the page's identity out before
+        the landmark that properly carries it. This is a visual cover for a visual wait.
+
+        `pointer-events: none` in the stylesheet: it sits over the room and must never be
+        the thing a click lands on, including during its fade.
+      */}
+      {intro && (
+        <div
+          className={`room__intro ${introGoing ? "room__intro--going" : ""}`}
+          aria-hidden="true"
+        >
+          <p className="room__intro-name">{SITE.name}</p>
+          <p className="room__intro-line">
+            Click the objects in the room &mdash; each one goes somewhere.
+          </p>
+        </div>
+      )}
 
       {/* Scenery, below the hotspot layer in source order because the affordance must
           always win: a wake and a focus ring draw over ambient light, never under it. */}
@@ -583,70 +755,78 @@ export default function Room() {
         })}
       </div>
 
-      {focus && (() => {
-        // One branch per `focusState`, and they do not share a props shape — which is the
-        // honest outcome, not a wart. The destinations arrive by different mechanisms (see
-        // "the cut" in room.css), so pretending they take the same inputs is what let the
-        // feeder inherit the monitor's grammar in the first place.
-        const open = phase !== 'leaving';
+      {focus &&
+        (() => {
+          // One branch per `focusState`, and they do not share a props shape — which is the
+          // honest outcome, not a wart. The destinations arrive by different mechanisms (see
+          // "the cut" in room.css), so pretending they take the same inputs is what let the
+          // feeder inherit the monitor's grammar in the first place.
+          const open = phase !== "leaving";
 
-        // **Neither cut destination takes a rectangle**, and that is the whole difference.
-        // The bench's panel is a clip that starts as the monitor's own rect and pushes its
-        // edges off the frame — it needs to know where the screen got to. A cut replaces the
-        // frame outright, so there is nothing to grow out of and nothing to measure. The two
-        // still get their own components rather than one parameterised panel: they cut by
-        // the same mechanism but they are not the same destination, and the rover's is a
-        // placeholder that should be easy to throw away (RoverFocus.tsx).
-        if (focus.focusState === 'window') {
+          // **Neither cut destination takes a rectangle**, and that is the whole difference.
+          // The bench's panel is a clip that starts as the monitor's own rect and pushes its
+          // edges off the frame — it needs to know where the screen got to. A cut replaces the
+          // frame outright, so there is nothing to grow out of and nothing to measure. The two
+          // still get their own components rather than one parameterised panel: they cut by
+          // the same mechanism but they are not the same destination, and the rover's is a
+          // placeholder that should be easy to throw away (RoverFocus.tsx).
+          if (focus.focusState === "window") {
+            return (
+              <WindowFocus
+                hotspot={focus}
+                open={open}
+                // When the cut fires, in ms from the click. Zero on the paths with no approach
+                // to trail (reduced motion, no WebGL, poster still up) — which is why this
+                // replaced a `cut` boolean plus a `.focus--cut` class that only ever set the
+                // same number in CSS.
+                atMs={noCamera ? 0 : cutMsFor(focus)}
+                lastInputRef={lastInputRef}
+                onExit={requestExit}
+              />
+            );
+          }
+
+          if (focus.focusState === "rover") {
+            return (
+              <RoverFocus
+                hotspot={focus}
+                open={open}
+                atMs={noCamera ? 0 : cutMsFor(focus)}
+                lastInputRef={lastInputRef}
+                onExit={requestExit}
+              />
+            );
+          }
+
+          // Where the clip starts: the object's rect *after* the push, or — on the paths where
+          // no camera ever moves — where it simply is. Handing the pushed rect to a still
+          // image would open the panel from a big centred rectangle sitting on nothing.
+          const screen = noCamera
+            ? imageRectToScreen(focus.rect, view.w, view.h, aspect)
+            : pushedRectToScreen(
+                focus.rect,
+                focus.aim,
+                focus.travel,
+                view.w,
+                view.h,
+                aspect,
+              );
           return (
-            <WindowFocus
+            <MonitorFocus
               hotspot={focus}
+              screen={screen}
+              view={view}
               open={open}
-              // When the cut fires, in ms from the click. Zero on the paths with no approach
-              // to trail (reduced motion, no WebGL, poster still up) — which is why this
-              // replaced a `cut` boolean plus a `.focus--cut` class that only ever set the
-              // same number in CSS.
-              atMs={noCamera ? 0 : cutMsFor(focus)}
+              cut={noCamera}
+              project={project}
+              onSelectProject={selectProject}
+              reducedMotion={reduced}
+              webgl={webgl}
               lastInputRef={lastInputRef}
               onExit={requestExit}
             />
           );
-        }
-
-        if (focus.focusState === 'rover') {
-          return (
-            <RoverFocus
-              hotspot={focus}
-              open={open}
-              atMs={noCamera ? 0 : cutMsFor(focus)}
-              lastInputRef={lastInputRef}
-              onExit={requestExit}
-            />
-          );
-        }
-
-        // Where the clip starts: the object's rect *after* the push, or — on the paths where
-        // no camera ever moves — where it simply is. Handing the pushed rect to a still
-        // image would open the panel from a big centred rectangle sitting on nothing.
-        const screen = noCamera
-          ? imageRectToScreen(focus.rect, view.w, view.h, aspect)
-          : pushedRectToScreen(focus.rect, focus.aim, focus.travel, view.w, view.h, aspect);
-        return (
-          <MonitorFocus
-            hotspot={focus}
-            screen={screen}
-            view={view}
-            open={open}
-            cut={noCamera}
-            project={project}
-            onSelectProject={selectProject}
-            reducedMotion={reduced}
-            webgl={webgl}
-            lastInputRef={lastInputRef}
-            onExit={requestExit}
-          />
-        );
-      })()}
+        })()}
     </div>
   );
 }
