@@ -2,7 +2,7 @@
 
 Personal site for Alex Rogachev. One indoor room, rendered third-person wide, that acts as
 a hub: the objects in the room are the navigation. Astro static site, one React island for
-camera state, plain WebGL2 for the depth-displaced camera push.
+camera state, plain WebGL2 for the depth-displaced camera push
 
 ## Run it
 
@@ -30,14 +30,14 @@ docs/               why the site is shaped this way, and how to rebuild the art.
 
 Read in this order; each one says what the one before it does not.
 
-| | |
-| --- | --- |
-| [CLAUDE.md](CLAUDE.md) | the rules that are load-bearing, and the list of things not to reopen |
-| [docs/PLAN.md](docs/PLAN.md) | the design: what the site is, and why several obvious ideas were rejected |
-| [docs/SCENE.md](docs/SCENE.md) | **the runbook.** Start to finish, for a new master |
-| [docs/PIPELINE.md](docs/PIPELINE.md) | why the runbook is shaped that way — read when something looks wrong |
-| [docs/PROMPTS.md](docs/PROMPTS.md) | every generation prompt, the naming convention, the asset ladder |
-| [art/README.md](art/README.md) | authored vs derived, and the depth map's format |
+|                                      |                                                                           |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| [CLAUDE.md](CLAUDE.md)               | the rules that are load-bearing, and the list of things not to reopen     |
+| [docs/PLAN.md](docs/PLAN.md)         | the design: what the site is, and why several obvious ideas were rejected |
+| [docs/SCENE.md](docs/SCENE.md)       | **the runbook.** Start to finish, for a new master                        |
+| [docs/PIPELINE.md](docs/PIPELINE.md) | why the runbook is shaped that way — read when something looks wrong      |
+| [docs/PROMPTS.md](docs/PROMPTS.md)   | every generation prompt, the naming convention, the asset ladder          |
+| [art/README.md](art/README.md)       | authored vs derived, and the depth map's format                           |
 
 ## The art pipeline in one paragraph
 
