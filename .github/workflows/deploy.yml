@@ -26,7 +26,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      # `npm install`, not `npm ci`. npm generates this lockfile on macOS, where it
+      # records `@img/sharp-wasm32` (astro's optional sharp variant) but never that
+      # package's own `@emnapi/*` deps, because it never selects the wasm variant on
+      # darwin. `npm ci` on Linux then hard-fails on the missing entries. No macOS
+      # regeneration fixes it — install resolves the gap on the runner instead.
+      - run: npm install --no-audit --no-fund
       - run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
