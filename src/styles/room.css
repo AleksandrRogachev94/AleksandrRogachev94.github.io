@@ -133,10 +133,10 @@
  *
  * The splat build cannot draw a single frame until all four rasters have arrived — they
  * are one `Promise.all` — so for 8.9MB the canvas is a blank rectangle. This is the same
- * master those splats were reconstructed from, 965KB, through the same cover-crop, so it
- * lands in register with what replaces it: the handover reads as the picture gaining depth,
- * not as a page finally loading. It doubles as the no-WebGL2 fallback, which is what it was
- * built for originally. */
+ * master those splats were reconstructed from, 965KB, through the same width-locked fit
+ * (roomGeometry.ts), so it lands in register with what replaces it: the handover reads as
+ * the picture gaining depth, not as a page finally loading. It doubles as the no-WebGL2
+ * fallback, which is what it was built for originally. */
 .room__still {
   /* **Absolute, and it matters now.** These two used to be a ternary — canvas or image,
    * never both — so the image could sit in flow. It now sits *over* a live canvas while
@@ -147,12 +147,25 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* No background of its own: on a viewport narrower than the master (5504:3072 — a phone
+   * in portrait) `object-fit: contain` below leaves a letterboxed gap above and below the
+   * picture, and `.room`'s own `--room-bg` shows through it. The canvas this hands off to
+   * clears to the same colour (roomRenderer.ts / splatRenderer.ts), so the two stay in
+   * register at the handover instead of flashing paper-to-black. */
   /* Warms up as it loads. `--load` is real bytes, written from the fetch (Room.tsx), and
    * the room coming up to full brightness is the same gesture as a light being switched on
    * — which is the room's own language, and costs nothing but a filter that is thrown away
    * when the poster is. Never fully dark: at zero it is a dim room, not an absent one. */
   filter: brightness(calc(0.72 + var(--load, 0) * 0.28)) saturate(calc(0.8 + var(--load, 0) * 0.2));
   transition: opacity 700ms cubic-bezier(0.33, 0, 0.2, 1), filter 400ms linear;
+}
+
+/* Below the master's own aspect (5504:3072 ≈ 1.792), `cover` is the wrong crop — it fills
+ * the box by cutting the sides off, which is exactly the width the room's hotspots are
+ * spread across. `contain` here is what makes the poster agree with the width-locked fit
+ * the live renderers use once they take over: full width, letterboxed top and bottom. */
+@media (max-aspect-ratio: 5504/3072) {
+  .room__still { object-fit: contain; }
 }
 
 /* The handover. Duration must stay in step with POSTER_FADE_MS in Room.tsx, which is how
@@ -1987,4 +2000,109 @@
    * keyframe, hanging a static smudge over the mug forever, which is worse than absent.
    * The room without it is exactly the master. */
   .ambient { display: none; }
+}
+
+/* ---- the day/night switch ------------------------------------------------
+ *
+ * Chrome, and dressed as chrome. The speaker control is glued to the art and lights in the
+ * room's own amber because it *is* an object in the room; this one is a button in the corner
+ * of a frame, so it takes the frame's vocabulary instead — a glass pill over whatever the
+ * room happens to be, legible on a sunlit wall and on a dark one without being told which.
+ *
+ * `color-mix` against `currentColor` rather than two hard-coded palettes: the room element
+ * carries `--room-ink`, and one set of rules that leans on it holds for both lightings. The
+ * alternative was a `.daylight--night` class, which is a second place to keep in sync with a
+ * state React already owns. */
+.daylight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.daylight {
+  position: absolute;
+  /* Bottom-*right*: bottom-left is the fig, which is the nearest thing in the frame and the
+   * one that moves most under drift, so a control there fights the parallax it sits on. */
+  right: clamp(12px, 2.2vw, 28px);
+  bottom: clamp(12px, 2.2vw, 28px);
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.5em 0.85em 0.5em 0.7em;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--room-bg) 55%, transparent);
+  backdrop-filter: blur(10px) saturate(1.1);
+  color: var(--room-ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 200ms ease, border-color 200ms ease, transform 200ms ease;
+}
+
+.daylight:hover {
+  background: color-mix(in srgb, var(--room-bg) 78%, transparent);
+  border-color: color-mix(in srgb, currentColor 32%, transparent);
+}
+
+.daylight:active {
+  transform: translateY(1px);
+}
+
+/* Both glyphs occupy the same cell and cross-fade, so the pill never reflows mid-swap. */
+.daylight__icons {
+  position: relative;
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
+
+.daylight__sun,
+.daylight__moon {
+  position: absolute;
+  inset: 0;
+  transition: opacity 260ms ease, transform 260ms ease;
+}
+
+/* A disc with rays, drawn rather than shipped: an inline SVG or an icon font would both be
+ * more bytes than two gradients for a shape this simple, and the zero-dependency bias in
+ * CLAUDE.md governs exactly this kind of choice. */
+.daylight__sun {
+  border-radius: 50%;
+  background: currentColor;
+  transform: scale(0.62);
+  box-shadow:
+    0 -0.62em 0 -0.42em currentColor, 0 0.62em 0 -0.42em currentColor,
+    -0.62em 0 0 -0.42em currentColor, 0.62em 0 0 -0.42em currentColor;
+}
+
+/* A crescent is one disc with another bitten out of it — the bite is a box-shadow spread
+ * over a transparent circle, so it takes the button's own background with it. */
+.daylight__moon {
+  border-radius: 50%;
+  box-shadow: inset -0.28em -0.14em 0 0 currentColor;
+  transform: rotate(-18deg);
+}
+
+/* Show the glyph for where the click *goes*, matching the label. Pressed = night is on, so
+ * the button offers daylight. */
+.daylight[aria-pressed='false'] .daylight__sun,
+.daylight[aria-pressed='true'] .daylight__moon {
+  opacity: 0;
+  transform: scale(0.4);
+}
+
+.daylight__label {
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .daylight,
+  .daylight__sun,
+  .daylight__moon {
+    transition: none;
+  }
 }

@@ -15,6 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoomRenderer, type RoomRenderer } from "../scripts/roomRenderer";
 import { createSplatRenderer } from "../scripts/splatRenderer";
+import { choose as chooseDaylight, current as currentDaylight, type Daylight }
+  from "../scripts/daylight";
 import {
   createCameraRig,
   pushTimeFor,
@@ -35,6 +37,7 @@ import type { Project } from "../data/projects";
 import { createRoomAudio, type RoomAudio } from "../scripts/roomAudio";
 import HotspotButton from "./Hotspot";
 import RoomControlButton from "./RoomControl";
+import DaylightToggle from "./DaylightToggle";
 import { useLastInput } from "./useLastInput";
 import Ambient from "./Ambient";
 import MonitorFocus from "./MonitorFocus";
@@ -130,7 +133,7 @@ const POSTER_FADE_MS = 700;
  * How long the title card stays *after* the room is ready to draw.
  *
  * **The whole design is in this one number being a hold rather than a deadline.** The card
- * exists because 8.9MB of splats is dead time the visitor spends looking at a room with no
+ * exists because 9.6MB of splats is dead time the visitor spends looking at a room with no
  * explanation and no name on it — and dead time you have to spend anyway is the one honest
  * place to put orientation. But tying it to "gone when loaded" makes it useless in the case
  * that matters most: a repeat visit with everything cached, where it would flash past in
@@ -159,7 +162,7 @@ export default function Room() {
   const [webgl, setWebgl] = useState(true);
   /**
    * Whether the renderer can actually draw. Distinct from `webgl`, which is about whether
-   * it ever will: between mount and here the splat build downloads 8.9MB across four
+   * it ever will: between mount and here the splat build downloads 9.6MB across four
    * rasters it needs *all* of before its first frame, and the canvas is blank for every
    * millisecond of it. The poster covers that window.
    */
@@ -180,6 +183,13 @@ export default function Room() {
    */
   const [audioOn, setAudioOn] = useState(false);
   const audioRef = useRef<RoomAudio | null>(null);
+  /**
+   * Which lighting is on screen, or null before the mount effect has read the visitor's
+   * clock. Null rather than a default because this is an island — a value chosen during
+   * render is chosen at *build* time, on a machine in another timezone, and the switch would
+   * visibly correct itself on hydration.
+   */
+  const [daylight, setDaylight] = useState<Daylight | null>(null);
   /**
    * The veil schedule currently in force — which destination the camera is approaching, in
    * the only terms the rig cares about. A ref rather than state because `onBeforeFrame` is
@@ -281,6 +291,13 @@ export default function Room() {
       root.style.setProperty("--par-y", k.ky.toFixed(2));
     };
 
+    // Read here, inside the effect, rather than during render: this is an island, so its
+    // initial HTML is produced at build time, and `current()` reads the *visitor's* clock
+    // and localStorage. Resolved at render it would bake the build machine's timezone into
+    // the page.
+    const initialDaylight = currentDaylight();
+    setDaylight(initialDaylight);
+
     // Both renderers satisfy the same interface, so nothing below this line — the rig, the
     // stage manager, the hotspots — knows which build is mounted. See src/data/scene.ts.
     const created =
@@ -289,6 +306,12 @@ export default function Room() {
             canvas,
             assetPrefix: SCENE.assetPrefix!,
             onBeforeFrame,
+            // The room opens in whatever lighting the visitor's own clock implies, unless
+            // they have overridden it before (scripts/daylight.ts). Decided here rather
+            // than toggled after mount so the night raster is fetched in the same batch as
+            // the other four — someone arriving at midnight never watches the day room
+            // resolve and then dissolve away.
+            variant: initialDaylight === "day" ? undefined : initialDaylight,
             // Straight onto the element as a custom property, not through React state. This
             // fires once per network chunk — dozens of times over a few seconds — and all it
             // ever does is set the width of one bar.
@@ -359,6 +382,26 @@ export default function Room() {
 
   const toggleAudio = useCallback(() => {
     void audioRef.current?.toggle().then(setAudioOn);
+  }, []);
+
+  // ---- the day/night switch ------------------------------------------------
+  //
+  // A room control: it changes the light in place and never touches the camera (rule 5). The
+  // renderer owns the transition — `setVariant` fetches the raster if this is the first ask
+  // and crossfades the cloud's colour, geometry untouched — so all this does is decide which
+  // one and record whether that was a disagreement with the clock worth keeping.
+  //
+  // The state is set optimistically rather than waiting on the fetch. The crossfade is the
+  // feedback, and a switch that stays in its old position for as long as a 2.4MB raster takes
+  // reads as broken; if the fetch fails the renderer keeps the lighting it has and logs, which
+  // is the same shape as everything else here degrading explicitly.
+  const toggleDaylight = useCallback(() => {
+    setDaylight((was) => {
+      const next: Daylight = was === "night" ? "day" : "night";
+      chooseDaylight(next);
+      rendererRef.current?.setVariant?.(next === "day" ? null : next);
+      return next;
+    });
   }, []);
 
   // ---- viewport size, for placing the hotspots -----------------------------
@@ -523,11 +566,18 @@ export default function Room() {
 
   // ---- the poster ----------------------------------------------------------
   //
-  // The poster is the same master the splats were reconstructed from, at 965KB against
-  // their 8.9MB, drawn through the same cover-crop — so it is not a placeholder standing in
+  // The poster is the same master the splats were reconstructed from, at 407KB against
+  // their 9.6MB, drawn through the same cover-crop — so it is not a placeholder standing in
   // for the room, it *is* the room, one frame flat. When the canvas takes over it does so
   // in register, and what the visitor sees is the picture gaining depth rather than a page
   // finally loading.
+  //
+  // **Exported at half the master's width (2752px), and register is why that is safe.**
+  // Register is a geometric property — same framing, same cover-crop — not a resolution
+  // one, and this is an `<img>` scaled to the viewport in both directions it is used: the
+  // handover here, and the flat fallback under no-WebGL2 or prefers-reduced-motion. 2752px
+  // is still 1.7x a 1600px viewport. Full width cost 981KB and bought nothing anyone can
+  // see, on the one asset that is on the critical path for first paint.
   //
   // Kept mounted through the fade and unmounted after, so a decoded full-frame image and
   // its composited layer are not left behind for the whole session.
@@ -673,7 +723,7 @@ export default function Room() {
       {poster && (
         <img
           className={`room__canvas room__still ${drawable ? "room__still--gone" : ""}`}
-          src={STILL}
+          src={(daylight && SCENE.variantStill?.[daylight]) ?? STILL}
           alt=""
           aria-hidden="true"
           fetchPriority="high"
@@ -753,6 +803,13 @@ export default function Room() {
             />
           ) : null;
         })}
+      </div>
+
+      {/* Chrome, not furniture, and it says so by sitting in the frame's corner rather than
+          on an object. The floor lamp is where this belongs; docs are in DaylightToggle.tsx.
+          Same `inert` gate as the other control layer — unreachable behind an open panel. */}
+      <div className="daylight-layer" inert={busy || undefined}>
+        <DaylightToggle daylight={daylight} onToggle={toggleDaylight} />
       </div>
 
       {focus &&
