@@ -40,7 +40,11 @@
   overflow: hidden;
   /* So the wake's `screen` blend mixes with the room behind it and not the page ground. */
   isolation: isolate;
-  background: var(--room-bg);
+  /* The letterbox mat. Below the master's 1.79:1 the art cannot fill a portrait viewport,
+   * and what shows above and below it is this — behind the poster, which is `contain` at
+   * that aspect, and behind the canvas, which now scissors to the same rectangle. Follows
+   * the lighting so the two halves of the load do not step at the handover. */
+  background: var(--mat, var(--room-bg));
   /* Written every frame by the rig: 0 at rest, 1 fully pushed in. The only channel
    * between the camera and the DOM, so the push costs no React renders. */
   --push: 0;
@@ -2001,6 +2005,10 @@
    * The room without it is exactly the master. */
   .ambient { display: none; }
 }
+
+/* Set from React alongside the renderer's variant, so one state drives both. Absent until
+ * the visitor's clock has been read, which is what the fallback in `--mat` is for. */
+.room[data-daylight='night'] { --mat: var(--room-bg-night); }
 
 /* ---- the day/night switch ------------------------------------------------
  *

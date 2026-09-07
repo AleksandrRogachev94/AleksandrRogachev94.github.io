@@ -707,6 +707,9 @@ export default function Room() {
     <div
       ref={rootRef}
       className={`room ${busy ? "room--busy" : ""} ${phase === "live" ? "room--live" : ""}`}
+      // Drives the letterbox mat in room.css. Same state as the renderer's variant, so the
+      // bands beside the art cannot disagree with the room inside them.
+      data-daylight={daylight ?? undefined}
       // The timeline, handed to the stylesheet so the camera and the keyframes cannot
       // disagree about when the camera stops. `--push` is written on this same element
       // every frame by the rig; React only touches the keys it owns, so the two coexist.

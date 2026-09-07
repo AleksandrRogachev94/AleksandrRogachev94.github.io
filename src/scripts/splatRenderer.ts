@@ -974,7 +974,31 @@ export async function createSplatRenderer(
 
     gl!.viewport(0, 0, w, h);
     gl!.clear(gl!.COLOR_BUFFER_BIT);
+
+    // **Nothing draws outside the master's own rectangle.** The fit is width-locked
+    // (roomGeometry.ts's header says why), so a canvas taller than the art's 1.79:1 —
+    // any phone in portrait — letterboxes top and bottom, and those bands are outside
+    // what the camera ever saw. They are not empty: a splat carries an offset of up to
+    // ±1100 master px from its own cell, so the strays land past the frame edge and
+    // speckle the mat with dots at whatever depth they were assigned. There is no
+    // reconstruction out there to make them right, and no clear colour hides them,
+    // because they are drawn *over* it.
+    //
+    // Scissor rather than a tighter cull: the cull is per-splat and conservative by
+    // design (it must not drop anything that would have drawn a pixel), whereas this is
+    // one rectangle that is exactly the picture, enforced by the rasteriser for free.
+    // It bites only in the letterbox case — on a wide canvas the art is taller than the
+    // canvas and the scissor clamps to it, which is the crop that was already happening.
+    const artW = m.width * s;
+    const artH = m.height * s;
+    const artX = (w - artW) / 2;
+    // GL's scissor origin is bottom-left; the fit is computed top-down.
+    const artY = (h - artH) / 2;
+    gl!.enable(gl!.SCISSOR_TEST);
+    gl!.scissor(Math.floor(artX), Math.floor(h - artY - artH),
+                Math.ceil(artW), Math.ceil(artH));
     gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, drawn.length);
+    gl!.disable(gl!.SCISSOR_TEST);
   }
 
   /**

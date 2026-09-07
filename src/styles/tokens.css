@@ -13,6 +13,11 @@
 :root {
   /* ---- The room: warm ------------------------------------------------ */
   --room-bg: #f2e9dc;         /* warm paper, the ground behind the art */
+  /* The same ground with the lights off. Only the room's letterbox mat uses it, and it is
+   * the 20th percentile of the night cloud's own visible layer — the value the splat
+   * renderer clears to (`backgrounds` in the manifest), so the bands beside the art and the
+   * uncovered pixels inside it are the same colour instead of stepping at the frame edge. */
+  --room-bg-night: #301d23;
   --room-surface: #e7d9c4;    /* raised warm surface: corner UI, labels */
   --room-ink: #2c241d;        /* body text on warm */
   --room-ink-soft: #6d5c4b;   /* secondary text, captions */
