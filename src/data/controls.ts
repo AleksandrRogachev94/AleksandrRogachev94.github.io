@@ -25,7 +25,7 @@
  * click differs, and that is decided here, not there.
  */
 
-import type { NormRect } from '../scripts/roomGeometry';
+import type { NormRect } from "../scripts/roomGeometry";
 
 export interface RoomControl {
   id: string;
@@ -88,9 +88,9 @@ export interface RoomControl {
 
 export const CONTROLS: readonly RoomControl[] = [
   {
-    id: 'speaker',
-    label: 'play something',
-    labelOn: 'stop the music',
+    id: "speaker",
+    label: "play something",
+    labelOn: "stop the music",
     // The room's own light, not a destination accent — a control changes something here
     // rather than taking you somewhere, and the accents belong one-to-one to projects.
     //
@@ -98,7 +98,7 @@ export const CONTROLS: readonly RoomControl[] = [
     // its own in room.css. One field cannot be both: the wake is `screen`-blended, and white
     // `screen` over pale sunlit art adds nothing at all, while an amber power indicator is
     // not what the hardware does. The two lights want opposite things from a colour.
-    accent: 'var(--room-amber)',
+    accent: "var(--room-amber)",
     rect: [0.4162, 0.5218, 0.4457, 0.5957],
     // Baked with `wake.py --feather 2`, not the default 4, and that is not taste.
     // `build_wake`'s spill is `blur(feather * 6)` in *output* pixels — an absolute radius —
@@ -107,7 +107,7 @@ export const CONTROLS: readonly RoomControl[] = [
     // a mean of 0.11, against the monitor's 0.96/0.33, and no opacity in the stylesheet
     // could rescue a mask that faint. At feather 2 it peaks at 0.93 with a mean of 0.23 —
     // the robot's profile to two decimals. **Scale feather with the object, not the frame.**
-    wake: '/art/wake-speaker.webp',
+    wake: "/art/wake-speaker.webp",
     wakeRect: [0.3997, 0.4922, 0.4629, 0.6237],
     // ~14 master px across, which is ~4 CSS px of core at a 1600px viewport and ~16px once
     // the bloom is counted. Small on purpose: an indicator that reads as a lamp is not an

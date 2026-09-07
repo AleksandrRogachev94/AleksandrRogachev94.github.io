@@ -843,7 +843,7 @@ and are voided by a new master.
 
 Attach the locked day image A.
 
-Three things this prompt got wrong for a long time, all fixed below and all worth knowing
+Four things this prompt got wrong for a long time, all fixed below and all worth knowing
 because the same mistakes are easy to reintroduce in C–F:
 
 - **It named the floor lamp as "beside the rubber plant".** That was true of an early render
@@ -857,6 +857,19 @@ because the same mistakes are easy to reintroduce in C–F:
 - **It knew about one strand of fairy lights.** There are now two, and at night they are the
   single biggest thing separating "cosy" from "dark room with lamps in it". They get named
   first, not last.
+- **It asked for an indicator light on the speaker.** The speaker's LED is a room *control*
+  — `src/data/controls.ts` renders it live on the top face, and it is the only thing saying
+  whether the music is playing. A painted one is always on, so the night room claimed the
+  speaker was playing when it was not, from a second position 145px away. **Nothing the site
+  renders live may also be painted into the art**, which is the same rule as "no UI on the
+  monitors" (CLAUDE.md). The printer and the rover keep theirs: the printer has no live light,
+  and the rover's painted dot lands inside the `rover-status` tell in `src/data/ambient.ts`,
+  which is what a painted light is *for* — giving the live one a surface that explains it.
+  The one this prompt drew was erased from the night master by hand — a harmonic fill of an
+  r=18px disc at (2423.5, 1794.5) — and SHARP re-run on the result, because the colour raster
+  comes from a reconstruction and a reconstruction fitted before the edit still carries the
+  light. Patching the raster instead was built first and thrown away: re-running SHARP is one
+  command, and it leaves nothing to remember on the next bake.
 
 ```text
 Edit this image to night time. Keep the composition, camera angle, furniture, objects and
@@ -874,8 +887,8 @@ Inside, the room is lit only by warm practical light, and the string lights carr
 - The desk lamp glows amber over the desk. The floor lamp on the LEFT, by the window behind
   the fiddle-leaf fig, is now switched ON, casting a warm pool up the curtain and across the
   nearby plants — it stays exactly where it is and does not move toward the rubber plant.
-- Small indicator lights on the 3D printer, on the grey speaker beside it, and on the rover on
-  the floor.
+- Small indicator lights on the 3D printer and on the rover on the floor. The grey speaker
+  beside the printer stays dark — nothing on it lights up.
 - Both monitors cast cool blue light across the desk, the keyboard and the wall behind them,
   which is the one cool note against all that amber.
 

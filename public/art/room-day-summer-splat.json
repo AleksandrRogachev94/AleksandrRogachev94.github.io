@@ -1,12 +1,12 @@
 {
-  "version": "dbc133897c70",
+  "version": "9a1b20e790c5",
   "geomAdler32": 2928095810,
   "variants": [
     "night"
   ],
   "backgrounds": {
     "night": [
-      0.1874,
+      0.1875,
       0.1133,
       0.1341
     ]
