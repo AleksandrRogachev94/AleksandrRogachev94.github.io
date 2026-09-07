@@ -20,7 +20,8 @@ and offsets are mostly zero and compress accordingly.
   -splat-geom.webp   RG = signed offset from the cell centre in master px, square-companded
                      B  = disparity high 8 bits, A = low 7 bits biased into [128, 255].
                      Lossless.
-  -splat-color.webp  RGB = colour from the degree-0 SH, A = opacity. Lossy q95.
+  -splat-color.webp  RGB = colour from the degree-0 SH, A = opacity. Lossless - it is a
+                     lookup table indexed by splat, not a picture; see the write stage.
   -splat-shape.webp  RGB = per-axis scale, log-quantised. Lossless.
   -splat-quat.webp   RGBA = rotation quaternion, unsigned 8-bit, signed so A >= 128.
                      Lossless.
@@ -142,6 +143,48 @@ def despeckle(rgb: np.ndarray, grid: int, layers: int, min_dev: float = 0.18,
     return out
 
 
+def check_variant_ply(name: str, path: Path, v: dict, base: dict,
+                      grid: int, layers: int) -> None:
+    """Assert a variant reconstruction indexes the same rays as the day one, and say how far
+    its geometry drifted.
+
+    **What must match, and why it is an assertion rather than a warning.** Only `f_dc` is
+    taken from a variant ply; it is applied to the day build's splats by index. That is
+    sound exactly when cell `i` of one file is cell `i` of the other, which holds because
+    SHARP's grid is 768x768 hardcoded and predicted from a single camera - so identical
+    intrinsics, image size and count mean identical rays. Any of those differing means the
+    two files are not the same lattice and the colours would be scattered across the room.
+
+    **What is allowed to differ, and what it costs.** The two runs fit independently, so a
+    splat's depth, size and rotation drift a little. `f_dc` is a blend coefficient, not a
+    surface colour - it is optimised so overlapping Gaussians sum to the master - so a
+    coefficient fitted for a slightly different Gaussian is slightly wrong on this one.
+    Measured day against night on this scene the median splat is within 0.9% in depth and
+    2% in size, with a real tail (p99 depth 56%, p10 scale 0.66). The tail is worth printing
+    because it is the one way this path can go wrong, and it is checked by rendering the
+    result at the home camera against the variant master - if the drift mattered, that error
+    rises above the day build's own.
+    """
+    for key, label in (("fx", "focal length"), ("cx", "principal x"), ("cy", "principal y"),
+                       ("width", "master width"), ("height", "master height")):
+        if v[key] != base[key]:
+            raise SystemExit(
+                f"--variant {name}={path.name}: {label} is {v[key]}, the day build's is "
+                f"{base[key]}. A variant ply must be SHARP run on a master with the same "
+                f"framing, or cell i is not the same ray in both and its colours belong to "
+                f"other splats.")
+    if len(v["xyz"]) != grid * grid * layers:
+        raise SystemExit(
+            f"--variant {name}={path.name}: {len(v['xyz']):,} splats, expected "
+            f"{grid * grid * layers:,} ({layers} x {grid}x{grid}).")
+    z, zv = base["xyz"][:, 2], v["xyz"][:, 2]
+    drift = np.abs(zv - z) / np.maximum(z, 1e-6)
+    ratio = v["scale"].max(1) / np.maximum(base["scale"].max(1), 1e-9)
+    print(f"  {'variant geometry drift':<35} depth p50 {np.median(drift):.3f} "
+          f"p99 {np.percentile(drift, 99):.3f}   scale p50 {np.median(ratio):.3f} "
+          f"p10 {np.percentile(ratio, 10):.3f}")
+
+
 def report(name: str, exact: np.ndarray, restored: np.ndarray, unit: str) -> None:
     err = np.abs(exact - restored)
     print(f"  {name:<22} err p50 {np.percentile(err, 50):9.4f}  p99.9 "
@@ -155,7 +198,23 @@ def main() -> int:
     ap.add_argument("--out-prefix", type=Path, required=True)
     ap.add_argument("--no-despeckle", action="store_true",
                     help="keep SHARP's colour outliers. See despeckle().")
+    ap.add_argument("--variant", action="append", default=[], metavar="NAME=PLY",
+                    help="an extra colour raster, from a second SHARP reconstruction of the "
+                         "same room under different light, e.g. "
+                         "night=art/room-night-summer.ply. Repeatable.")
     args = ap.parse_args()
+
+    variants = []
+    for spec in args.variant:
+        name, _, path = spec.partition("=")
+        if not name or not path:
+            raise SystemExit(f"--variant wants NAME=PLY, got {spec!r}")
+        if not path.endswith(".ply"):
+            raise SystemExit(
+                f"--variant {spec!r}: a variant is a second SHARP reconstruction, not an "
+                f"image. Inferring a variant's colours from a photograph of it was tried "
+                f"and removed - see the comment at the variant loop in main().")
+        variants.append((name, Path(path)))
 
     g = load_ply(args.ply)
     xyz, rgb, alpha = g["xyz"], g["rgb"], g["scale"] * 0 + g["alpha"][:, None]
@@ -235,10 +294,55 @@ def main() -> int:
     col = np.clip(rgb, 0, 1)
     if not args.no_despeckle:
         col = despeckle(col, grid, layers)
-    colour = np.concatenate([
-        np.rint(col * 255).astype(np.uint8),
-        np.rint(np.clip(alpha, 0, 1) * 255).astype(np.uint8)[:, None],
-    ], axis=1)
+    alpha8 = np.rint(np.clip(alpha, 0, 1) * 255).astype(np.uint8)[:, None]
+
+    def pack(c: np.ndarray) -> np.ndarray:
+        return np.concatenate([np.rint(c * 255).astype(np.uint8), alpha8], axis=1)
+
+    colour = pack(col)
+
+    # ---- variant colours ---------------------------------------------------------------
+    #
+    # **One geometry, N colours, and each colour comes from its own reconstruction.**
+    # A variant ply is SHARP run again on the variant master. Only its `f_dc` is taken;
+    # position, size, rotation and opacity stay the day build's, so every authored number in
+    # the app - the aim points in hotspots.ts, the disparities in ambient.ts, the excursion
+    # in scene.ts - is still measured against the cloud that ships, and a crossfade dissolves
+    # between two colours rather than swimming between two clouds. The payload is one extra
+    # colour raster, the same as the inferred path cost.
+    #
+    # SHARP's grid is 768x768 predicted from one camera, so cell `i` is the same ray in both
+    # reconstructions; `check_variant_ply` asserts the framing that guarantees it.
+    #
+    # **Settled: a variant's colours are never inferred from an image of it.** A previous
+    # build took a pixel-registered night *edit* of the master and moved every splat's colour
+    # by the lighting ratio it read there. The appeal is obvious - one reconstruction, one
+    # 8MB ply, a variant costs a jpg - and it cannot be made to work, because the question it
+    # has to answer is undetermined. A photograph does not record what is behind a leaf, so a
+    # hidden splat has no pixel of its own and is lit through whatever covers it. In this
+    # room that is a white glazing bar, which looks the same at midnight as at noon, in front
+    # of a yard that does not: at 12cm of lateral travel a sunlit fence slid out from behind
+    # every bar, `f_dc` from the *day* fit dimmed by a ratio measured on the mullion.
+    #
+    # Roughly 250 lines went on bounding that - blurring the ratio, anchoring on `f_dc`
+    # rather than a point sample, and a radius-free nearest-same-depth search to lend hidden
+    # splats a visible neighbour's lighting. Each fixed something real and none fixed this.
+    # A night reconstruction has no daylight in it at any depth, hidden or visible, so the
+    # failure is gone by construction rather than bounded. Measured against the night master
+    # at the home camera: inferred 8.93/255, reconstructed 6.01, where the day build scores
+    # 7.94 against its own master. If a variant ever has no reconstruction, it does not get
+    # a raster - it gets a reconstruction.
+    variant_colours = []
+    for n, p in variants:
+        v = load_ply(p)
+        check_variant_ply(n, p, v, g, grid, layers)
+        c = np.clip(v["rgb"], 0, 1)
+        if not args.no_despeckle:
+            c = despeckle(c, grid, layers)
+        print(f"  {p.name:<35} from its own reconstruction, mean level "
+              f"{c.mean() / col.mean():.3f}x the day fit")
+        variant_colours.append((n, c))
+    variant_rasters = [(f"color-{n}", pack(c)) for n, c in variant_colours]
 
     # ---- shape ------------------------------------------------------------------------
     s_lo = float(np.log(max(scale.min(), 1e-9)))
@@ -270,17 +374,39 @@ def main() -> int:
     # zeroed, which puts it at the origin or gives it a degenerate rotation. `exact`
     # disables that cleanup. The round trip below is checked, not assumed.
     #
-    # Colour is the one raster that really is a picture, so it takes lossy WebP: 1.84MB ->
-    # 0.99MB for a p99 error of 5/255, which is what WebP is for.
+    # **Colour is not a picture either, and treating it as one was a real defect.** It used
+    # to take lossy WebP - "the one raster that really is a picture" - for 1.23MB against
+    # 2.46MB lossless. But lossy WebP subsamples chroma 4:2:0, and a 2x2 block here is not
+    # four neighbouring pixels of an image, it is *four splats*, which share a grid cell
+    # neighbourhood and nothing else. Two of them can be a hundred metres apart in depth -
+    # a glazing bar and the yard behind it - and 4:2:0 makes them share one hue. On screen
+    # they are not in the same place, so each carries a colour blended with a surface it is
+    # nowhere near.
+    #
+    # Measured on the night raster: mean per-splat error 2.7/255, p99 27, **max 215**, and
+    # chroma is flat within every 2x2 block (spread 0.9 against luma's 5.2) - the encoder's
+    # fingerprint, not the data's. Lossless is exactly 0.
+    #
+    # It stayed invisible for as long as the room shipped day-only, because the day palette
+    # has almost no chroma contrast where the geometry has depth contrast: a white glazing
+    # bar against a pale sky differs in luma, which 4:2:0 keeps at full resolution. Night is
+    # the opposite - warm lamplit bars against a deep blue pane is close to the maximum
+    # chroma step the format can be given - so the same encoder setting that cost nothing
+    # for a year started painting the window with hue borrowed across depth.
+    #
+    # The other three rasters are lossless because they are quantised geometry. This one is
+    # a lookup table indexed by splat. Neither is a picture; only one of them was treated
+    # like it. +1.2MB per raster.
     args.out_prefix.parent.mkdir(parents=True, exist_ok=True)
     shp = (grid * layers, grid)  # rows, cols - layers stacked vertically
     lossless = dict(lossless=True, quality=100, method=6, exact=True)
     total = 0
     written: list[Path] = []
-    for name, data, mode, kw in (("geom", geom, "RGBA", lossless),
-                                 ("color", colour, "RGBA", dict(quality=95, method=6)),
+    for name, data, mode, kw in [("geom", geom, "RGBA", lossless),
+                                 ("color", colour, "RGBA", lossless),
                                  ("shape", shape, "RGB", lossless),
-                                 ("quat", rot, "RGBA", lossless)):
+                                 ("quat", rot, "RGBA", lossless)] + [
+                                 (n, d, "RGBA", lossless) for n, d in variant_rasters]:
         path = args.out_prefix.with_name(f"{args.out_prefix.name}-splat-{name}.webp")
         src = data.reshape(*shp, len(mode))
         Image.fromarray(src, mode).save(path, format="WEBP", **kw)
@@ -332,6 +458,29 @@ def main() -> int:
     manifest = {
         "version": version,
         "geomAdler32": int(geom_adler),
+        # Extra colour rasters sharing this geometry, as `-splat-color-<name>.webp`. The
+        # renderer treats an absent or unknown name as "day" and draws the base raster, so
+        # dropping a variant from a bake degrades to the day room rather than to nothing.
+        "variants": [n for n, _ in variants],
+        # **What the renderer clears to, per variant, and it is not decoration.** Any pixel
+        # no splat covers takes this colour, and the camera opens such pixels every time it
+        # leaves centre: disocclusion at a silhouette is a hole, and a hole is the clear
+        # colour. It was one hard-coded warm off-white (0.949, 0.914, 0.863) chosen to match
+        # `--room-bg` for the letterbox mat, on the assumption that the mat was the only
+        # place it showed. It is not. In a night room every one of those holes was a
+        # daylight-cream patch, which no amount of work on the colour rasters could fix,
+        # because the pixels were never drawn from one.
+        #
+        # A low percentile of the variant's own visible layer, not the median. Holes do not
+        # open in an average place: they open behind the nearest, largest objects in the
+        # frame - the fig, the lampshade, the window frame - and what is behind those is the
+        # dark end of the room. The median of a night frame is 86/61/68, which is lighter
+        # than the yard it would be standing in for, and reads as a light patch. Erring dark
+        # is also the safer direction, because a hole that is slightly too dark reads as
+        # shadow and one that is slightly too light reads as a hole.
+        "backgrounds": {n: [round(float(x), 4) for x in
+                            np.percentile(c[:nh].reshape(-1, 3), 20, axis=0)]
+                        for n, c in variant_colours},
         "grid": grid, "layers": layers, "count": int(len(xyz)),
         "width": W, "height": H, "fx": float(fx), "cx": float(cx), "cy": float(cy),
         "dispLo": d_lo, "dispHi": d_hi,

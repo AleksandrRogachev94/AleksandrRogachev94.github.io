@@ -2,14 +2,22 @@
  * Where the art actually is on screen, and how to turn a point on it into a point in the
  * room.
  *
- * The renderer reconstructs in the *art's* own frame and then crops to whatever aspect the
- * canvas happens to be — `object-fit: cover` expressed as a field of view
- * (roomRenderer.ts, `fovYProj`). Everything that has to line up with the painting has to
- * redo that same crop: hotspot buttons sitting over their objects, a click turned back
+ * The renderer reconstructs in the *art's* own frame and then fits it to whatever aspect
+ * the canvas happens to be, width-locked: the art's full width always lands on screen, and
+ * the vertical axis absorbs the mismatch — cropped top/bottom on a canvas wider than the
+ * art, letterboxed top/bottom on one narrower (a phone in portrait). Expressed as a field
+ * of view in roomRenderer.ts (`fovYProj`). Everything that has to line up with the painting
+ * has to redo that same fit: hotspot buttons sitting over their objects, a click turned back
  * into a room coordinate, the takeover growing out of the screen's centre.
  *
- * Doing it in one place is the point. Three copies of a cover-crop drift apart the first
- * time someone resizes the window to a shape nobody tested.
+ * Width-locked rather than a true `object-fit: cover` (which would crop *either* axis,
+ * whichever fits) because the room's hotspots are spread wide — 0.25 to 0.80 of the frame —
+ * and only two objects sit in the vertical middle. Cropping width on a portrait phone
+ * cropped those hotspots off-screen entirely; a phone is tall enough to spare that gets
+ * back as harmless letterboxing instead.
+ *
+ * Doing it in one place is the point. Three copies of this fit drift apart the first time
+ * someone resizes the window to a shape nobody tested.
  */
 
 /** A rectangle on the art, normalised 0..1, origin top-left. Same convention as hotspots.ts. */
@@ -27,14 +35,15 @@ export interface ScreenRect {
 
 /**
  * The art's placement inside a viewport of the given size: the size it is drawn at, and
- * where its top-left corner falls. One or other offset is always negative or zero, because
- * cover overflows on the axis it is not fitting.
+ * where its top-left corner falls. Width always matches the viewport exactly (`left` is
+ * always 0) — see the file header for why this is width-locked rather than true cover.
+ * `top` is negative when the viewport is wide enough to crop the art vertically, positive
+ * when it is narrow enough to letterbox it instead.
  */
-function cover(viewW: number, viewH: number, imageAspect: number) {
-  const viewAspect = viewW / Math.max(1, viewH);
-  const width = viewAspect > imageAspect ? viewW : viewH * imageAspect;
-  const height = viewAspect > imageAspect ? viewW / imageAspect : viewH;
-  return { width, height, left: (viewW - width) / 2, top: (viewH - height) / 2 };
+function fit(viewW: number, viewH: number, imageAspect: number) {
+  const width = viewW;
+  const height = viewW / imageAspect;
+  return { width, height, left: 0, top: (viewH - height) / 2 };
 }
 
 /** A normalised rect on the art -> its box in CSS pixels inside the viewport. */
@@ -44,7 +53,7 @@ export function imageRectToScreen(
   viewH: number,
   imageAspect: number,
 ): ScreenRect {
-  const c = cover(viewW, viewH, imageAspect);
+  const c = fit(viewW, viewH, imageAspect);
   return {
     left: c.left + rect[0] * c.width,
     top: c.top + rect[1] * c.height,
@@ -55,8 +64,8 @@ export function imageRectToScreen(
 
 /**
  * A point in CSS pixels inside the viewport -> normalised coordinates on the art. Values
- * outside 0..1 mean the point landed on cropped-away image, which is possible: cover shows
- * less than the whole painting.
+ * outside 0..1 mean the point landed off the art — either on cropped-away image (wide
+ * viewport) or on the letterboxed gap (narrow one).
  */
 export function screenToImage(
   x: number,
@@ -65,7 +74,7 @@ export function screenToImage(
   viewH: number,
   imageAspect: number,
 ): [number, number] {
-  const c = cover(viewW, viewH, imageAspect);
+  const c = fit(viewW, viewH, imageAspect);
   return [(x - c.left) / c.width, (y - c.top) / c.height];
 }
 
@@ -166,7 +175,7 @@ export function parallaxCoeff(
   viewH: number,
   opts: { fovDeg: number; imageAspect: number },
 ): { kx: number; ky: number } {
-  const c = cover(viewW, viewH, opts.imageAspect);
+  const c = fit(viewW, viewH, opts.imageAspect);
   const tanHalf = Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
   // Moving the eye right slides the art left; moving it up slides the art down. Both are
   // the renderer's own `world - camera`, read back out in image coordinates.
@@ -199,7 +208,7 @@ export function pushedRectToScreen(
   viewH: number,
   imageAspect: number,
 ): ScreenRect {
-  const c = cover(viewW, viewH, imageAspect);
+  const c = fit(viewW, viewH, imageAspect);
   const k = 1 / Math.max(0.05, 1 - travel);
   const width = (rect[2] - rect[0]) * c.width * k;
   const height = (rect[3] - rect[1]) * c.height * k;

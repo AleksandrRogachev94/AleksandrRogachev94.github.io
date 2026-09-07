@@ -9,7 +9,9 @@ hotspots.json          SAM prompts for the CLICKABLE objects. Splat build; see b
 objects.json           what hides what, plus normalised SAM prompts and depth ops.
 masks-manual/          masks SAM could not win — generated or painted, then committed.
 fills/                 hand-made plates for holes LaMa cannot fill. Often absent.
-room-day-summer.ply    GITIGNORED. SHARP's reconstruction; see below.
+room-night-summer.jpg  the night master. A pixel-registered EDIT of the day master.
+room-day-summer.ply    GITIGNORED. SHARP's reconstruction of the day master; see below.
+room-night-summer.ply  GITIGNORED. SHARP's reconstruction of the NIGHT master; see below.
 build/                 GITIGNORED. Everything the tools derive from the above.
 ```
 
@@ -18,18 +20,32 @@ build/                 GITIGNORED. Everything the tools derive from the above.
 The line is drawn there deliberately: if a file can be remade by running the chain it goes
 in `build/`, and then "is this worth committing?" never has to be answered again.
 
-## The `.ply`, and why it is not committed
+## The `.ply` files, and why they are not committed
 
-`room-day-summer.ply` is Apple SHARP's Gaussian reconstruction of the master — 63MB, and
-the input to `tools/sharp_splat_bake.py`, which writes the four rasters the site actually
-loads into `public/art/`. **Those are committed; the PLY is not.** It is a tool output
-rather than an authored input, and 63MB of it in history would be paid for on every clone
+There are **two**, one per lighting state, and both are required to run the bake:
+
+```
+room-day-summer.ply     geometry AND day colour. Everything but the variant rasters.
+room-night-summer.ply   night colour only — its f_dc, onto the day build's splats.
+```
+
+Each is Apple SHARP's Gaussian reconstruction of the matching master, 63MB, and together
+they are the input to `tools/sharp_splat_bake.py`, which writes the five rasters the site
+actually loads into `public/art/`. **Those are committed; the PLYs are not.** They are tool
+outputs rather than authored inputs, and 126MB in history would be paid for on every clone
 and every CI checkout of a repo that deploys to GitHub Pages.
 
-The honest caveat: unlike everything in `build/`, this one is **not cheaply regenerable**.
-SHARP's weights are research-only and it wants a GPU. So keep a copy somewhere outside
-git — losing it means the bake cannot be re-run from the master alone, even though the
-site would keep working from the committed rasters. If it is ever regenerated, the numbers
+**A variant is a reconstruction, never an image.** Inferring a variant's colours from a
+photograph of it was built, shipped and removed; the reasoning is in
+[docs/SCENE-SPLAT.md](../docs/SCENE-SPLAT.md) under "Do not reopen". The short version is
+that a photograph does not record what is behind a leaf, so hidden splats get lit through
+whatever covers them, and lateral motion pulls the result out into the open. Adding a
+season means adding a master *and* running SHARP on it.
+
+The honest caveat: unlike everything in `build/`, these are **not cheaply regenerable**.
+SHARP's weights are research-only and it wants a GPU. So keep copies somewhere outside
+git — losing them means the bake cannot be re-run from the masters alone, even though the
+site keeps working from the committed rasters. If either is ever regenerated, the numbers
 in `src/data/scene.ts` (`nearZ`, `farZ`, `fovDeg`) come straight out of the bake's manifest
 and must be copied across with it.
 

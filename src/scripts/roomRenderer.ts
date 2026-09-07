@@ -134,6 +134,16 @@ export interface RoomRenderer {
   setEdgeCut(threshold: number, layer?: number): void;
   /** Draw only layer `i`, or all of them again with -1. Diagnostic. */
   setSoloLayer(index: number): void;
+  /**
+   * Crossfade to a colour variant from `SCENE.variants`, or to the base art with null.
+   *
+   * Optional because it is a property of the splat build: variants there are one extra
+   * raster over shared geometry, so the room can be relit without reloading it. The mesh
+   * builds have no equivalent — their colour is baked into per-layer plates — and rather
+   * than give them a no-op that silently does nothing, the method is simply absent and
+   * callers check for it.
+   */
+  setVariant?(name: string | null): void;
   readonly layerCount: number;
   /**
    * Aspect of the art itself, which is what the reconstruction is fixed to. Anything that
@@ -492,19 +502,24 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     opts.onBeforeFrame?.(dt);
     resize();
     const canvasAspect = canvas.width / canvas.height;
-    // Reconstruction is fixed to the art's own frame, so the canvas showing a different
-    // aspect must *crop* the room rather than letterbox it. When the canvas is wider than
-    // the art, narrow the vertical fov until the art's width exactly fills it; when it is
-    // taller, the vertical fov already governs. This is `object-fit: cover` in fov terms.
-    const fovYProj = canvasAspect > imageAspect
-      ? 2 * Math.atan((Math.tan(fovY / 2) * imageAspect) / canvasAspect)
-      : fovY;
+    // Reconstruction is fixed to the art's own frame; the canvas showing a different aspect
+    // has to be width-locked to it, not true `object-fit: cover` — see the header of
+    // roomGeometry.ts, whose `fit()` this must keep agreeing with pixel-for-pixel, since
+    // that is what places the hotspot buttons over this same render. Solving for the
+    // vertical fov that keeps the *horizontal* fov pinned to the art's own width, at any
+    // canvas aspect, crops top/bottom on a canvas wider than the art and letterboxes
+    // top/bottom on one narrower (a phone in portrait) — one formula, both cases.
+    const fovYProj = 2 * Math.atan((Math.tan(fovY / 2) * imageAspect) / canvasAspect);
     perspective(proj, fovYProj, canvasAspect, 0.05, farZ * 4);
     lookAt(view, camera.eye, camera.center, UP);
     multiply(viewProj, proj, view);
     gl!.uniformMatrix4fv(u.viewProj, false, viewProj);
 
-    gl!.clearColor(0, 0, 0, 1);
+    // `--room-bg` (tokens.css), as a literal — a shader can't read a CSS custom property.
+    // Only visible as the letterbox mat on a canvas narrower than the master (see
+    // roomGeometry.ts); it used to be black, which read as broken rather than as a frame
+    // around the picture, and disagreed with `.room__still`'s own background besides.
+    gl!.clearColor(0.949, 0.914, 0.863, 1);
     gl!.clear(gl!.COLOR_BUFFER_BIT | gl!.DEPTH_BUFFER_BIT);
     for (let i = 0; i < textures.length; i++) {
       if (solo >= 0 && solo !== i) continue;

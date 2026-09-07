@@ -20,8 +20,13 @@ artifact was the composite seam, not the inpainter, and it records what that cos
 
 There are now **three scene builds**. The *authored* one is everything above. The one
 that **ships** draws an Apple SHARP Gaussian reconstruction directly — no plates, no
-masks, no inpainting, four files and two commands. Its runbook is
-[docs/SCENE-SPLAT.md](docs/SCENE-SPLAT.md). The third
+masks, no inpainting, five files and two commands. Its runbook is
+[docs/SCENE-SPLAT.md](docs/SCENE-SPLAT.md). **Every lighting variant is its own
+reconstruction**, sharing the day build's geometry and contributing only `f_dc`: night is
+`art/room-night-summer.ply`, not an image. Inferring a variant's colours from a photograph
+of it was built and removed — a photograph does not record what is behind a leaf, so hidden
+splats get lit through whatever covers them and lateral motion pulls a sunlit fence out
+from behind every glazing bar. The third
 ([docs/SCENE-SHARP.md](docs/SCENE-SHARP.md)) flattened the same reconstruction into plates
 and a torn mesh; it is superseded and its doc says why.
 

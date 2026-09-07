@@ -208,7 +208,14 @@ export function createCameraRig(
   let pushing = false;
   let t = 0; // 0 = home, 1 = fully pushed in. Linear; `eased` is what anything else reads.
   let eased = 0;
+  // `pointerTarget` is the raw cursor position, updated instantly by `setPointer` — a mouse
+  // entering the canvas from outside can jump straight from the centre to an edge in one
+  // event. `pointer` is what `update` actually reads, eased toward the target each frame so
+  // that jump doesn't reach the camera as a snap. Time-constant smoothing rather than a flat
+  // lerp factor, so it doesn't get sharper or softer at different refresh rates.
+  let pointerTarget = { x: 0, y: 0 };
   let pointer = { x: 0, y: 0 };
+  const POINTER_SMOOTH_MS = 120;
   let dolly = 0;
   /** Runs whenever `update` does, so drift is paused for free by everything that already
    * stops the rAF (tab hidden, room scrolled off, a focus state live) — see roomRenderer's
@@ -257,6 +264,11 @@ export function createCameraRig(
     // cursor for the people who had asked it not to.
     const amp = reduced ? 0 : tuning.parallax;
     clockMs += dtMs;
+    const pointerK = reduced ? 1 : 1 - Math.exp(-dtMs / POINTER_SMOOTH_MS);
+    pointer = {
+      x: lerp(pointer.x, pointerTarget.x, pointerK),
+      y: lerp(pointer.y, pointerTarget.y, pointerK),
+    };
     // The idle wander. Same fade-on-push and same reduced-motion cutoff as cursor
     // parallax — it is added to `pointer`'s contribution rather than replacing it, so a
     // moving mouse and the room's own drift are one offset, not two fights over the eye.
@@ -316,7 +328,7 @@ export function createCameraRig(
     // the two must agree, because the stylesheet uses this to decide how much to blur the
     // room and the panel is registered against where the camera really is.
     progress: () => eased,
-    setPointer(x, y) { pointer = { x, y }; },
+    setPointer(x, y) { pointerTarget = { x, y }; },
     setDolly(z) { dolly = clamp(z, -1.5, 1.5); },
     /**
      * Sideways camera motion is the only thing that uncovers painted background, so it is

@@ -36,6 +36,15 @@ export interface SplatManifest {
   version: string;
   /** Adler-32 of the geom raster as written. See `loadRaster` for what it is guarding. */
   geomAdler32?: number;
+  /**
+   * Per-variant clear colour, linear 0-1 RGB, from the bake.
+   *
+   * Not decoration: every pixel no splat covers takes it, and lateral motion opens exactly
+   * such pixels at every silhouette. A single hard-coded value meant a night room filled its
+   * disocclusion holes with daylight cream. Absent for the base raster, which keeps
+   * `DEFAULT_BG` so it agrees with `--room-bg` for the letterbox mat.
+   */
+  backgrounds?: Record<string, [number, number, number]>;
   grid: number;
   layers: number;
   count: number;
@@ -101,7 +110,20 @@ export interface SplatRendererOptions {
   maxPixels?: number;
   /** See RoomRendererOptions.onBeforeFrame — the site has exactly one rAF and this is it. */
   onBeforeFrame?(dtMs: number): void;
+  /**
+   * Colour variant to open with, from `SCENE.variants` — or omitted for the day cloud.
+   *
+   * Passed at construction rather than set afterwards because a visitor arriving at
+   * midnight should never see the day room first. Named here, the variant raster is fetched
+   * in the same `Promise.all` as the other four and the room's first frame is already
+   * night; set through `setVariant` later, it is fetched lazily, because most visitors
+   * never touch the control and 1.2MB is not worth spending on a state they will not enter.
+   */
+  variant?: string;
 }
+
+/** `--room-bg` (tokens.css). The base raster's clear colour; see `setClear`. */
+const DEFAULT_BG: readonly [number, number, number] = [0.949, 0.914, 0.863];
 
 /**
  * Splat index -> texel. Kept in one place because the bake, the sort and the shader all
@@ -120,6 +142,8 @@ uniform highp sampler2D uGeom;   // RG offset (companded), BA disparity (15-bit,
 uniform highp sampler2D uColor;  // RGB colour, A opacity
 uniform highp sampler2D uShape;  // RGB per-axis scale, log-quantised
 uniform highp sampler2D uQuat;   // RGBA rotation quaternion
+uniform highp sampler2D uColorB; // the variant being crossfaded to, same cloud
+uniform float uMix;              // 0 = uColor, 1 = uColorB
 
 uniform vec3 uCam;            // camera eye, in the reconstruction's own frame
 uniform mat3 uView;           // world -> camera rotation
@@ -185,7 +209,13 @@ void main() {
   // the grid the rasters are addressed by stays intact. 2.00% of the scene, and reading
   // that here rather than after the projection drops their quads before they are
   // rasterised — the fragment shader would only have discarded them one pixel at a time.
+  // Every variant is baked off this same cloud and shares its opacity exactly - a variant
+  // changes the light on a surface, never whether the surface is there - so the mix touches
+  // colour only and the cull below is independent of it. The branch is on a uniform, so it
+  // is coherent across every invocation and costs nothing at uMix 0, which is the steady
+  // state: the second fetch happens only while a crossfade is actually running.
   vColor = texelFetch(uColor, tx, 0);
+  if (uMix > 0.0) vColor.rgb = mix(vColor.rgb, texelFetch(uColorB, tx, 0).rgb, uMix);
   if (vColor.a <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
 
   float iz = 1.0 / p.z;
@@ -193,10 +223,10 @@ void main() {
   vec3 s = exp(mix(vec3(uScaleLog.x), vec3(uScaleLog.y), texelFetch(uShape, tx, 0).rgb));
 
   // ---- off-screen, cheaply ------------------------------------------------------------
-  // The room is drawn object-fit: cover, so a window that is not the master's 16:9 crops
-  // one axis away entirely — at a 2.10 aspect that is 15% of the splats, every one of them
-  // taken through the covariance rebuild and the projection before the clipper threw the
-  // quad away.
+  // The room is drawn width-locked to the master (see the uFocal/uCenter comment in
+  // draw()), so a window that is not the master's 16:9 pushes one axis off-screen entirely
+  // — at a 2.10 aspect that is 15% of the splats, every one of them taken through the
+  // covariance rebuild and the projection before the clipper threw the quad away.
   //
   // A quad's half-extent is bounded without building the covariance at all: however the
   // ellipsoid is rotated, its projection cannot exceed its largest world axis, and the
@@ -525,9 +555,15 @@ export async function createSplatRenderer(
   // wire re-compresses them and the header is exactly what the decoder will receive. A
   // server that omits it leaves `total` at 0, `onBytes` undefined, and the room simply
   // appears when it is ready — the poster underneath is what makes that acceptable.
+  // A variant named at construction rides in this same batch and is uploaded *as* the
+  // colour raster, rather than being faded in afterwards — there is nothing to fade from on
+  // the first frame, and a visitor arriving at midnight must not watch the day room resolve
+  // and then dissolve. The base raster is fetched anyway: it is what "back to day" fades to,
+  // and skipping it would make the first toggle the slow one.
+  const names = ['geom', 'color', 'shape', 'quat'];
+  if (opts.variant) names.push(`color-${opts.variant}`);
   const responses = await Promise.all(
-    ['geom', 'color', 'shape', 'quat']
-      .map((n) => fetch(`${assetPrefix}-splat-${n}.webp${v}`)),
+    names.map((n) => fetch(`${assetPrefix}-splat-${n}.webp${v}`)),
   );
   const total = responses.reduce(
     (n, r) => n + Number(r.headers.get('content-length') ?? 0), 0,
@@ -538,7 +574,7 @@ export async function createSplatRenderer(
     ? (n: number) => { seen += n; opts.onProgress!(Math.min(1, seen / total)); }
     : undefined;
 
-  const [geomRaster, colorRaster, shapeRaster, quatRaster] =
+  const [geomRaster, colorRaster, shapeRaster, quatRaster, variantRaster] =
     await Promise.all(responses.map((r) => loadRaster(r, onBytes)));
 
   // Decoding and upload still take a beat after the last byte lands, so this is the bar
@@ -555,19 +591,73 @@ export async function createSplatRenderer(
   }
   gl.useProgram(program);
 
-  const textures = [
-    upload(gl, 0, geomRaster), upload(gl, 1, colorRaster),
-    upload(gl, 2, shapeRaster), upload(gl, 3, quatRaster),
-  ];
-  (['uGeom', 'uColor', 'uShape', 'uQuat'] as const).forEach((n, i) =>
+  // **Colour textures are keyed by variant, not by unit.** Each variant is uploaded once and
+  // kept; the units are just which two the shader is currently blending. Unit 1 is what the
+  // room is lit by now, unit 4 is what it is fading to, and `shown` — not the unit number —
+  // is the answer to "which lighting is on screen".
+  //
+  // Opening on a variant means that variant *is* unit 1 from the first frame, with the day
+  // raster parked as the thing "back to day" will fade to. With no variant loaded there is
+  // nothing to fade to yet, so unit 4 shares unit 1's texture: `uMix` is 0 and the shader
+  // never samples it, but a sampler still has to reference a complete texture for the draw
+  // to be valid.
+  // **`textures` is indexed by texture unit, and that is load-bearing.** `draw()` rebinds
+  // every unit from this array on every frame — `activeTexture(TEXTURE0 + i)` for
+  // `textures[i]` — so the index *is* the unit. Building it as a plain list in upload order
+  // put shape in slot 1 and quat in slot 2, and the shader spent a frame reading quaternions
+  // as log-quantised scale: the room came apart into radial spikes. Any binding done outside
+  // this array lives exactly until the next frame.
+  const textures: WebGLTexture[] = [];
+  textures[0] = upload(gl, 0, geomRaster);
+  textures[2] = upload(gl, 2, shapeRaster);
+  textures[3] = upload(gl, 3, quatRaster);
+
+  const colorTex = new Map<string | null, WebGLTexture>();
+  colorTex.set(null, upload(gl, 1, colorRaster));
+  if (variantRaster) colorTex.set(opts.variant!, upload(gl, 1, variantRaster));
+
+  let shown: string | null = opts.variant ?? null;
+
+  function bindColour(unit: 1 | 4, variant: string | null) {
+    // Through the array, so the rebind in draw() agrees. Binding the unit directly here and
+    // leaving the array alone is the bug above, one frame later.
+    textures[unit] = colorTex.get(variant)!;
+    gl!.activeTexture(gl!.TEXTURE0 + unit);
+    gl!.bindTexture(gl!.TEXTURE_2D, textures[unit]);
+  }
+  bindColour(1, shown);
+  bindColour(4, shown);
+
+  /**
+   * The clear colour follows whichever lighting is on screen, mixed the same way the colour
+   * rasters are so a crossfade does not step.
+   *
+   * `DEFAULT_BG` is `--room-bg`, and the base raster deliberately keeps it: it is what the
+   * letterbox mat has always been and what `.room__still` agrees with. A variant overrides
+   * it with the median of its own visible layer, which is the least conspicuous thing a
+   * disocclusion hole can be filled with.
+   */
+  function bgOf(variant: string | null): readonly [number, number, number] {
+    return (variant && m.backgrounds?.[variant]) || DEFAULT_BG;
+  }
+  function setClear(from: string | null, to: string | null, t: number) {
+    const a = bgOf(from);
+    const b = bgOf(to);
+    gl!.clearColor(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
+                   a[2] + (b[2] - a[2]) * t, 1);
+  }
+
+  (['uGeom', 'uColor', 'uShape', 'uQuat', 'uColorB'] as const).forEach((n, i) =>
     gl.uniform1i(gl.getUniformLocation(program, n), i));
 
   const N = m.count;
   const u = Object.fromEntries(
     ['uCam', 'uView', 'uFocal', 'uCenter', 'uViewport', 'uDilate', 'uSigma', 'uGrid',
-     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog', 'uHalfSigma2']
+     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog', 'uHalfSigma2', 'uMix']
       .map((n) => [n, gl.getUniformLocation(program, n)]),
   ) as Record<string, WebGLUniformLocation | null>;
+
+  gl.uniform1f(u.uMix, 0);
 
   gl.uniform1i(u.uGrid, m.grid);
   gl.uniform2f(u.uPlate, m.width, m.height);
@@ -666,7 +756,16 @@ export async function createSplatRenderer(
   gl.enable(gl.BLEND);
   // Premultiplied source-over, which is what the fragment shader emits.
   gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  gl.clearColor(0, 0, 0, 1);
+  // `--room-bg` (tokens.css), as a literal — a shader can't read a CSS custom property.
+  //
+  // **This is not only the letterbox mat, and believing that it was cost a long evening.**
+  // It is what every pixel gets when no splat covers it, and the camera manufactures such
+  // pixels every time it leaves centre: a disocclusion at a silhouette is a hole, and a hole
+  // is this colour. At the home camera the field tiles completely, so it never shows and the
+  // mat is genuinely the only place you see it — which is exactly why the assumption held
+  // for as long as the room shipped one lighting state. Under a dark variant every hole the
+  // camera opened was a daylight-cream patch. `setClear` keeps it on the variant.
+  setClear(shown, shown, 0);
 
   // ---- camera ---------------------------------------------------------------------------
   // Same convention as roomRenderer and roomGeometry: origin, looking down -Z, +Y up. The
@@ -733,6 +832,73 @@ export async function createSplatRenderer(
   const drawnEye: [number, number, number] = [0, 0, 0];
   let dirty = true;
 
+  // ---- day/night crossfade -------------------------------------------------------------
+  //
+  // A dissolve rather than a cut, because nothing in the room *moves* between variants — the
+  // same splats are simply lit differently — so a cut throws away the one thing that makes
+  // the swap read as the light changing rather than as the page reloading.
+  //
+  // 900ms matches the hotspot push in cameraRig.ts. Under `prefers-reduced-motion` it snaps,
+  // which is the same contract as every other transition here: the room still changes, it
+  // just does not animate.
+  const FADE_MS = 900;
+  const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+  let mix = 0;
+  let fadeTarget: string | null = null;
+  let fadingTo = false;
+
+  function stepCrossfade(dt: number) {
+    if (!fadingTo) return;
+    mix = Math.min(1, mix + dt / FADE_MS);
+    // smoothstep: the linear ramp has a visible corner at both ends on a whole-frame
+    // luminance change, which is exactly what this is.
+    const eased = mix * mix * (3 - 2 * mix);
+    gl!.uniform1f(u.uMix, eased);
+    setClear(shown, fadeTarget, eased);
+    if (mix >= 1) settleCrossfade();
+  }
+
+  /** The fade is over: promote the target to unit 1 and go back to a single texture fetch. */
+  function settleCrossfade() {
+    shown = fadeTarget;
+    fadingTo = false;
+    mix = 0;
+    bindColour(1, shown);
+    bindColour(4, shown);
+    setClear(shown, shown, 0);
+    gl!.uniform1f(u.uMix, 0);
+  }
+
+  async function setVariant(name: string | null) {
+    const target = name ?? null;
+    if (target === shown && !fadingTo) return;
+    fadeTarget = target;
+
+    if (!colorTex.has(target)) {
+      // Lazily fetched, because most visitors never touch the control. `?v=` is the bake's
+      // content hash, the same one the other rasters carry.
+      // The base art is `-splat-color`, a variant is `-splat-color-<name>`. Unreachable for
+      // null today — the base raster is always loaded at construction — but the URL has to
+      // be right or the day case becomes `color-null.webp` the first time that changes.
+      const suffix = target === null ? '' : `-${target}`;
+      const res = await fetch(`${assetPrefix}-splat-color${suffix}.webp${v}`);
+      if (!res.ok) return;                       // degrade to the lighting already on screen
+      const raster = await loadRaster(res);
+      if (!gl || fadeTarget !== target) { raster.close(); return; }
+      colorTex.set(target, upload(gl, 4, raster));
+      raster.close();
+    }
+
+    bindColour(1, shown);
+    bindColour(4, target);
+    mix = 0;
+    fadingTo = true;
+    // A stopped renderer has no frame to ease in — a hidden tab, a mounted focus state, or
+    // reduced motion. Land on the new lighting immediately so it is correct whenever the
+    // room is next looked at.
+    if (!running || motionQuery.matches) settleCrossfade();
+  }
+
   function frame(now: number) {
     if (!running) return;
     // Scheduled first, so a skipped frame still keeps the loop alive. `stop()` cancels it.
@@ -744,11 +910,12 @@ export async function createSplatRenderer(
     const dt = last ? now - last : 16.7;
     last = now;
     opts.onBeforeFrame?.(dt);
+    stepCrossfade(dt);
 
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
     // Scale the whole buffer down until it fits the budget. Applied to dpr rather than to
-    // the width and height separately so the aspect ratio — and therefore the `cover` crop
-    // the hotspot rectangles are placed against — is untouched.
+    // the width and height separately so the aspect ratio — and therefore the fit the
+    // hotspot rectangles are placed against — is untouched.
     const budget = opts.maxPixels ?? 3.2e6;
     const want = canvas.clientWidth * canvas.clientHeight * dpr * dpr;
     if (want > budget) dpr *= Math.sqrt(budget / want);
@@ -759,9 +926,13 @@ export async function createSplatRenderer(
       dirty = true;
     }
 
-    // `object-fit: cover`, in the reconstruction's own pixel units — the same crop
-    // roomGeometry.cover() computes, so hotspot rects still land on their objects.
-    const s = Math.max(w / m.width, h / m.height);
+    // Width-locked fit, in the reconstruction's own pixel units — the same fit
+    // roomGeometry.fit() computes, so hotspot rects still land on their objects. Always
+    // scaling by the width ratio (never `Math.max` with the height ratio, which was true
+    // `object-fit: cover` and cropped the sides off on a canvas narrower than the master —
+    // exactly a phone in portrait, where the room's widest-spread hotspots sit) crops
+    // top/bottom on a wide canvas and letterboxes top/bottom on a narrow one instead.
+    const s = w / m.width;
 
     const movedPx = Math.hypot(camera.eye[0] - drawnEye[0], camera.eye[1] - drawnEye[1],
                                camera.eye[2] - drawnEye[2]) * (m.fx * s) / m.nearZ;
@@ -849,6 +1020,7 @@ export async function createSplatRenderer(
     setFov() {},
     setEdgeCut() {},
     setSoloLayer(index: number) { solo(index); },
+    setVariant(name: string | null) { void setVariant(name); },
     start() {
       wantRunning = true;
       startLoop();
@@ -860,12 +1032,16 @@ export async function createSplatRenderer(
     destroy() {
       renderer.stop();
       document.removeEventListener('visibilitychange', onVisibility);
-      textures.forEach((t) => gl!.deleteTexture(t));
+      // A Set because slots 1 and 4 of `textures` are aliases into `colorTex`, and every
+      // variant ever faded to lives only in the map.
+      new Set([...textures, ...colorTex.values()]).forEach((t) => gl!.deleteTexture(t));
+      colorTex.clear();
       gl!.deleteBuffer(cornerBuf);
       gl!.deleteBuffer(orderBuf);
       gl!.deleteVertexArray(vao);
       gl!.deleteProgram(program);
-      [geomRaster, colorRaster, shapeRaster, quatRaster].forEach((b) => b.close());
+      [geomRaster, colorRaster, shapeRaster, quatRaster, variantRaster]
+        .forEach((b) => b?.close());
     },
   };
   return renderer;

@@ -59,8 +59,30 @@ export interface SceneBuild {
   layers?: SceneLayer[];
   /** Directory + basename the splat bake wrote. `splat` builds only. */
   assetPrefix?: string;
+  /**
+   * Extra colour rasters that share this build's geometry, as `-splat-color-<name>.webp`.
+   * `splat` builds only.
+   *
+   * **One geometry, N colours.** Each variant is its own SHARP reconstruction of the same
+   * room under different light, and only its `f_dc` is taken — position, size, rotation and
+   * opacity all stay this build's. So a variant costs one extra ~2.4MB raster rather than a
+   * second 12MB bake, every authored number in hotspots.ts, ambient.ts and this file stays
+   * valid across all of them, and a crossfade dissolves between two colours instead of
+   * swimming between two clouds.
+   *
+   * Inferring a variant's colours from a photograph of it was built and removed; see
+   * docs/SCENE-SPLAT.md, "Do not reopen". Adding a season means adding a master *and*
+   * running SHARP on it.
+   */
+  variants?: readonly string[];
   /** Whole-frame plate for no-WebGL2 and prefers-reduced-motion. */
   still: string;
+  /**
+   * The same plate per variant. A visitor arriving at midnight gets the night poster, so the
+   * flat fallback and the loading frame agree with the room that is about to draw instead of
+   * flashing a sunlit version of it first.
+   */
+  variantStill?: Readonly<Record<string, string>>;
   /**
    * Whole-frame depth, for turning a click into a 3D point on the CPU. A /dev/room
    * affordance only — the site aims at authored points in hotspots.ts, so it never
@@ -86,7 +108,16 @@ export interface SceneBuild {
 
 const ART = '/art/room-day-summer';
 
-/** The authored build: SAM masks, an `in_front_of` graph, LaMa fills. Three plates. */
+/**
+ * The authored build: SAM masks, an `in_front_of` graph, LaMa fills. Three plates.
+ *
+ * **Its plates are no longer committed to `public/art/`.** They were 3.1MB that nothing
+ * fetched — `SCENE` is the splat build, so `layers` is never read and `/dev/room` follows
+ * `SCENE` too. The convention in CLAUDE.md is that `public/art/` holds what the site loads,
+ * and they had stopped being that. Selecting this build again means re-running the chain in
+ * docs/SCENE.md, which regenerates them from `art/` in full. The reasoning this build exists
+ * to record is in docs/PIPELINE.md and docs/FILL.md and is not going anywhere.
+ */
 export const LAYERED: SceneBuild = {
   id: 'layered',
   kind: 'mesh',
@@ -165,17 +196,19 @@ export const SHARP_SPLAT: SceneBuild = {
   id: 'splat',
   kind: 'splat',
   assetPrefix: ART,
+  variants: ['night'],
   still: `${ART}.webp`,
+  variantStill: { night: '/art/room-night-summer.webp' },
   width: 5504,
   height: 3072,
-  // Straight out of the PLY. The room really is 1.03m to 107.5m deep.
-  nearZ: 1.030,
-  farZ: 107.50,
+  // Straight out of the PLY. The room really is 1.04m to 108.9m deep.
+  nearZ: 1.040,
+  farZ: 108.92,
   fovDeg: 38.73,
   // ml-sharp's own budget (compute_max_offset): 8% of the image diagonal of sweep at the
   // nearest content's distance. `ROOM_TUNING`'s ambient peaks at 0.115 against this — see
   // cameraRig.ts, which measured the disocclusion at each offset rather than guessing.
-  excursion: 0.119,
+  excursion: 0.120,
 };
 
 /** The build the site loads. */

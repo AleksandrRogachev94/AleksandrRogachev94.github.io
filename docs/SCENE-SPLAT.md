@@ -93,14 +93,53 @@ renderer.**
 
 ```bash
 tools/.venv/bin/python tools/sharp_splat_bake.py \
-    --ply art/room-day-summer.ply --out-prefix art/build/room-day-summer
+    --ply art/room-day-summer.ply --out-prefix art/build/room-day-summer \
+    --variant night=art/room-night-summer.ply
 cp art/build/room-day-summer-splat*.{webp,json} public/art/
 # then check /dev/splat: it verifies the rasters reached the GPU byte-for-byte
 ```
 
+**Both PLYs are required build inputs**, and neither is committed (`art/*.ply` is
+gitignored — see [art/README.md](../../art/README.md)). The bake cannot run from a fresh
+clone; the rasters it writes are what ships. Keep both copies outside git.
+
 The bake prints its own quantisation errors and fails loudly if a lossless raster does not
 round-trip, and asserts the two invariants that keep an image decoder from eating the
 geometry (see below). `--no-despeckle` disables the one clean-up stage for A/B.
+
+**Do not drop the `--variant` flags.** They are not optional extras: `variants` in
+`src/data/scene.ts` names every colour raster the site expects to be able to fetch, and a
+bake run without them writes a manifest with a new `version` and no night raster, so the
+lamp switches to a 404. Every variant is re-baked from the same PLY every time.
+
+## Variants: one geometry, N colour rasters
+
+`night` is a **second SHARP reconstruction** of the same room under different light. Only
+its `f_dc` is taken. Position, size, rotation and opacity all stay the day build's, so the
+variant costs one extra `-splat-color-<name>.webp` (~2.4 MB) rather than a second 12 MB
+bake, every authored number — the aim points in `hotspots.ts`, the disparities in
+`ambient.ts`, `excursion` in `scene.ts` — stays valid across all variants, and a day→night
+crossfade dissolves between two colours instead of swimming between two clouds.
+
+That is sound because SHARP's grid is 768×768 hardcoded and predicted from a single
+camera, so **cell `i` is the same ray in both files**. `check_variant_ply()` asserts the
+framing that guarantees it — focal length, principal point, master size, splat count — and
+fails the bake rather than scattering one room's colours across another's splats.
+
+The two fits are independent, so geometry drifts a little: on this scene the median splat
+is within 0.9% in depth and 2% in size, with a real tail (p99 depth 56%, p10 scale 0.66).
+`f_dc` is a blend coefficient rather than a surface colour, so a coefficient fitted for a
+slightly different Gaussian is slightly wrong on this one. The bake prints that drift every
+run. **The check that it does not matter is rendering the result at the home camera against
+the variant's own master**, where this build scores 6.01/255 — better than the day build
+manages against the day master (7.94). If a future variant's drift ever does matter, that
+number is where it will show, and the escalation is to ship the variant's geometry too
+(+10 MB, and `nearZ`/`farZ`/`fovDeg` re-copied from its manifest).
+
+**Do not drop the `--variant` flags.** They are not optional extras: `variants` in
+`src/data/scene.ts` names every colour raster the site expects to be able to fetch, and a
+bake run without them writes a manifest with a new `version` and no night raster, so the
+day/night control switches to a 404. Every variant is re-baked from the day PLY every time.
 
 ## What gets written
 
@@ -277,6 +316,39 @@ defect, so each fix revealed the next one.
 ## Do not reopen
 
 - **Flattening the Gaussians into plates** — see the measurement at the top.
+
+- **Inferring a variant's colours from an image of it.** The whole idea, not a detail of it.
+  A night master is a pixel-registered edit, so the geometry is still exactly right and only
+  the light changed — which makes moving each splat's colour by the lighting ratio read at
+  its own pixel look like the obvious cheap win: one reconstruction, one 8MB ply, a variant
+  costs a jpg. It cannot be made to work, because the question is undetermined. **A
+  photograph does not record what is behind a leaf.** A hidden splat has no pixel of its own,
+  so it is lit through whatever covers it; here that is a white glazing bar, which looks the
+  same at midnight as at noon, in front of a yard that does not. At 12cm of lateral travel a
+  sunlit fence slid out from behind every bar — `f_dc` from the *day* fit, dimmed by a ratio
+  measured on the mullion.
+
+  Roughly 250 lines went on bounding that, and each fixed something real: a difference
+  anchored on the master keeps the master's lighting wherever the delta is wrong, so anchor
+  on a ratio; a raw point sample painted across an elongated splat smears along its long axis
+  (structure kept 0.465 against `f_dc`'s 1.000), so anchor on `f_dc`; a fixed ±6-cell search
+  for a same-depth neighbour is sized for the *ribbon* when what bounds it is the size of the
+  *occluder*, so make the search radius-free. None of them fixed it. Measured against the
+  night master at the home camera: inferred **8.93**/255, reconstructed **6.01**, with the
+  day build at **7.94** against its own master.
+
+  Two process lessons cost more than the bug. Every metric was computed on the rasters, which
+  are the renderer's *input*, while the complaint was about rendered frames under camera
+  motion — and an offline renderer that draws circular discs where the shader draws
+  anisotropic conics reproduces none of it (8.9/255 at home against the real conic's 6.0,
+  and it showed the fence as clean). **If the artifact only appears when the camera moves,
+  nothing measured on a still raster can find it.**
+
+- **Believing a crop of the splat grid without converting the coordinates.** The grid is
+  768×768 over a 16:9 master, so rows compress: `master_y = grid_y / 768 × 3072`. A box
+  picked by eye off the master and applied to the grid measures the wrong band — it is how a
+  variant fix that had not worked got reported as working, because the region checked was sky
+  and the complaint was about the fence.
 
 - **TripoSplat, or any object-reconstruction model, for a room.** Tried 2026-09-02. Its
   background-removal stage *deleted the room*: the preprocessed input keeps the 3D printer,

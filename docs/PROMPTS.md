@@ -11,6 +11,16 @@ every other variant. All hotspot rectangles and the depth map are derived from i
 regenerate a variant from the base text prompt — variants are _edits_ of a locked image,
 because edits preserve registration and fresh generations drift.
 
+**Under the splat build, registration is no longer a matter of looking right — it is sampled.**
+The shipping build bakes geometry once from the day master and gives each variant only a
+recoloured `-splat-color-*.webp`, whose colours are read out of the variant image at each
+splat's own master pixel. So a night or seasonal edit that is reframed, rescaled, straightened
+or returned at a different aspect does not merely look slightly off: every splat samples the
+wrong pixel, and the error is largest exactly where contrast is highest — silhouettes. A
+variant that drifts by ten pixels is not a slightly-wrong variant, it is a smeared one. Say
+"do not crop, zoom, straighten or resize" in every variant prompt, and check the returned
+file's dimensions against the master before using it.
+
 **2. Anything lit at night must exist in the day image, unlit.** String lights, the floor
 lamp, indicator LEDs. Adding an object at night changes geometry and costs us the shared
 depth map.
@@ -147,6 +157,16 @@ fixes:
   to frequency; more sentences do not help. Fix: give the model a prior it already has to
   land on ("a round chassis like a robot vacuum"), and make the object big enough that the
   feature has pixels.
+
+  **A term of art is not an instruction.** The poster paragraph has said "on opposite lock"
+  since the first draft and every render has come back with the front wheels dead straight —
+  because the prior behind "two cars drifting through tyre smoke" is a million photographs in
+  which the wheels are a blur and the steering angle is invisible. Two words of jargon do not
+  beat that, however precisely they name the thing. The fix is the same as the rover's: state
+  the geometry the picture must show ("the near front wheel is turned off the centreline, you
+  see the side of the tyre") and say what wrong looks like, so there is something to check
+  against. That is worth about forty words, which rule 11 says to spend, because this is a
+  constraint that demonstrably broke.
 - **Attention competition.** Thirty described objects means the room gets re-planned around
   whichever one is loudest. Fix: tier the list. Hotspots and composition-critical objects get
   40–60 words; set dressing gets one clause and no negations.
@@ -423,10 +443,18 @@ one board on two brackets, flush to the wall — holding worn books, a trailing 
 unlit strand of fairy lights along its edge.
 
 A framed poster, a flat screen-printed illustration rather than a photograph: two cars
-drifting in tandem through grey tyre smoke, low three-quarter front angle, on opposite lock.
-In front a pearl-white Nissan Silvia S15 with a magenta-to-orange wedge down its flank; behind
-it a navy BMW 2 Series (F22) with an acid-green diagonal band and a black GT wing. The
+drifting in tandem through grey tyre smoke, low three-quarter front angle. In front a
+pearl-white Nissan Silvia S15 with a magenta-to-orange wedge down its flank; behind it a navy
+BMW 2 Series (F22) with an acid-green diagonal band and a black GT wing, chasing close — its
+nose nearly level with the lead car's rear quarter, not trailing a car's length back. The
 bodywork is bare apart from those colour shapes.
+
+Both cars are on opposite lock, and it has to be VISIBLE. The rear of each car has stepped out
+toward the outside of the corner, and the front wheels are steered the other way — back along
+the direction the car is actually travelling, not along the way its body is pointing. On each
+car the near front wheel is turned clearly off the centreline, showing the side of the tyre and
+its tread rather than sitting flat and square to the camera. Front wheels pointing straight
+ahead are wrong.
 
 FLOOR AND WALLS: warm wide-plank wood with sun falling across it, a rug in warm rust and ochre
 under the desk and chair, and walls in a warm putty — never cool grey, never white.
@@ -528,6 +556,15 @@ that must hold registration. Do geometry now or not at all.
 prompt specifies, the master and the prompt above have diverged. That is fine — the master is
 the authority, and the prompt is only for starting over — but say so here rather than
 discovering it later: *the shipped poster is whatever the locked master shows.*
+
+Two known divergences, both deliberate. The master's livery is orange-and-blue on white, not
+the magenta-to-orange wedge the prompt asks for. And the prompt wants the chase car right on
+the lead car's door, where the master has it a car's length back: closing that gap was
+specified, then dropped from the fix pass, because moving a car means redrawing it and the
+livery is the thing we were trying to keep. **Repositioning is never a subtraction.** Steering
+angle and lettering are — you can change a wheel's angle or lift a decal without the rest of
+the car being re-derived — which is why those two shipped and this one did not. If the gap ever
+matters enough, it is a from-scratch roll of A, not an edit.
 
 ### Export, don't screenshot
 
@@ -806,32 +843,68 @@ and are voided by a new master.
 
 Attach the locked day image A.
 
+Three things this prompt got wrong for a long time, all fixed below and all worth knowing
+because the same mistakes are easy to reintroduce in C–F:
+
+- **It named the floor lamp as "beside the rubber plant".** That was true of an early render
+  and stopped being true the moment A-fix item 7 separated them — the lamp is now far left by
+  the window, four metres from the plant. A stale positional description in a variant prompt is
+  worse than none: it invites the generator to move the object to match the words. **Describe
+  variant objects by where they are in the locked master, or not at all.**
+- **It ended with "Ultra realistic."** A contradictory global, and by rule 6 globals outrank
+  everything — so this one sentence was quietly arguing against the STYLE block on every roll.
+  Gone.
+- **It knew about one strand of fairy lights.** There are now two, and at night they are the
+  single biggest thing separating "cosy" from "dark room with lamps in it". They get named
+  first, not last.
+
 ```text
 Edit this image to night time. Keep the composition, camera angle, furniture, objects and
-their exact positions PERFECTLY identical — change only the lighting and the view outside
-the window.
+their exact positions PERFECTLY identical — change only the lighting and the view outside the
+window. Do not crop, zoom, straighten, resize or re-frame, and output at exactly the same
+pixel size as the input.
 
-Outside it is a summer night: deep blue sky with a few stars, the neighboring rooftop in
-silhouette, the garden in deep blue shadow. The bird feeder outside remains clearly
-visible, lit by a small warm glowing ring around its camera lens casting a soft pool of
-light onto its seed tray.
+Inside, the room is lit only by warm practical light, and the string lights carry it:
 
-Inside, the room is lit only by warm practical light: the desk lamp glowing amber, the
-floor lamp beside the rubber plant now switched ON casting a warm pool over the plants, the
-strand of fairy lights along the wooden shelf now lit with small warm points, small
-indicator lights on the 3D printer and the bluetooth speaker, and the two monitors
-casting cool blue light across the desk, the keyboard and the wall behind them. Deep warm
-shadows everywhere else — rich and cozy rather than black.
+- The strand along the top of the window and down its casing is lit — every small bulb a warm
+  amber point, bright enough to read as the room's main decoration, throwing a gentle warm
+  wash onto the window frame and the curtain beside it.
+- The strand along the wooden shelf on the right wall is lit the same way, its bulbs picking
+  out the books and the trailing plant and washing warm light down the wall below.
+- The desk lamp glows amber over the desk. The floor lamp on the LEFT, by the window behind
+  the fiddle-leaf fig, is now switched ON, casting a warm pool up the curtain and across the
+  nearby plants — it stays exactly where it is and does not move toward the rubber plant.
+- Small indicator lights on the 3D printer, on the grey speaker beside it, and on the rover on
+  the floor.
+- Both monitors cast cool blue light across the desk, the keyboard and the wall behind them,
+  which is the one cool note against all that amber.
+
+Deep warm shadows everywhere else — rich and cosy rather than black. The room should read as
+lamplit and lived-in at night, not as a dark room.
+
+Outside it is a summer night: deep blue sky with a few stars, the neighbouring rooftop in
+silhouette, the garden in deep blue shadow. The bird feeder outside stays clearly visible, lit
+by a small warm glowing ring around its camera lens casting a soft pool of light onto its seed
+tray. Keep that ring modest and contained — a small ring and a small pool, not a lantern.
 
 IMPORTANT: remove ALL daylight from the room. There must be no bright sunlit shafts or
 window-shaped patches of sunlight anywhere on the floor, the rug or the walls — those are
-daylight and must be replaced by warm pools of lamplight and cool spill from the monitors.
-The glass prism on the windowsill stays exactly where it is but is now unlit: dark glass
-catching a little lamplight, with no spectrum, no rainbow and no glow of its own. Ultra realistic.
+daylight and must be replaced by warm pools of lamplight and cool spill from the monitors. The
+glass prism on the cabinet top stays exactly where it is but is now unlit: dark glass catching
+a little lamplight, with no spectrum, no rainbow and no glow of its own.
 
-Same painterly style and same palette relationships, inverted for night. No readable text
-anywhere.
+Every object stays exactly where it is and keeps its exact shape: the window and all its white
+dividing bars, the curtains, the desk and both monitors, the guitar, the framed poster, the
+shelf, the cabinet, the printer, the plants, the chair, the rover and the rug. Nothing is
+added, removed, moved or resized — only the light on it changes.
+
+Same painterly style, same brushwork, same palette relationships, inverted for night. No
+readable text anywhere.
 ```
+
+**Keep the feeder's lens ring modest.** `src/data/ambient.ts` already draws a live pulsing glow
+at that exact rect (`feeder-lens`), so the painted ring is the fixture the pulse sits on top of,
+not the effect itself. Painted too hot, the two stack and the feeder blooms.
 
 ---
 
