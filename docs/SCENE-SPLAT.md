@@ -95,7 +95,7 @@ renderer.**
 tools/.venv/bin/python tools/sharp_splat_bake.py \
     --ply art/room-day-summer.ply --out-prefix art/build/room-day-summer \
     --variant night=art/room-night-summer.ply
-cp art/build/room-day-summer-splat*.{webp,json} public/art/
+cp art/build/room-day-summer-splat*.{webp,bin,json} public/art/
 # then check /dev/splat: it verifies the rasters reached the GPU byte-for-byte
 ```
 
@@ -145,12 +145,18 @@ day/night control switches to a 404. Every variant is re-baked from the day PLY 
 
 All four rasters are 768×1536 (grid × grid·layers), layer A on top.
 
+**Three of them are not images.** `color` is a picture and ships as one; `geom`, `shape` and
+`quat` are lookup tables indexed by splat, and they ship as raw planes because a browser is
+entitled to colour-manage anything it decodes as an image — see the last row of the bug
+table below. The `.bin` layout is `SPLT` + uint32 width + uint32 height + four planes,
+deflated, read back through `DecompressionStream('deflate')`.
+
 | file | contents | encoding |
 |---|---|---|
-| `-splat-geom.webp` | RG offset from cell centre, B/A 15-bit disparity, A biased ≥128 | lossless |
-| `-splat-color.webp` | RGB colour, A opacity | lossy q95 |
-| `-splat-shape.webp` | per-axis scale | lossless, log-quantised |
-| `-splat-quat.webp` | rotation quaternion | lossless |
+| `-splat-geom.bin` | RG offset from cell centre, B/A 15-bit disparity, A biased ≥128 | planar + deflate |
+| `-splat-color.webp` | RGB colour, A opacity | lossless WebP |
+| `-splat-shape.bin` | per-axis scale | planar + deflate, log-quantised |
+| `-splat-quat.bin` | rotation quaternion | planar + deflate |
 | `-splat.json` | grid, intrinsics, every range needed to undo the above, plus `version` (content hash, appended to the raster URLs as `?v=`) and `geomAdler32` | — |
 
 ```
@@ -211,8 +217,9 @@ same test is why the feeder's ambient tell sits on the camera module actually pa
 
 ## Bugs found, and what they looked like
 
-All six were silent, and **five were data going through a picture pipeline** — the
-recurring hazard in this design and the thing to suspect first.
+All seven were silent, and **six were data going through a picture pipeline** — the
+recurring hazard in this design and the thing to suspect first. The last one ended the
+argument: three of the four rasters do not go through one any more.
 
 | bug | where | symptom |
 |---|---|---|
@@ -222,6 +229,28 @@ recurring hazard in this design and the thing to suspect first.
 | covariance dilated without compensating alpha | renderer | sub-pixel splats promoted to hard dots — Mip-Splatting's determinant-ratio fix. Worth 0.32dB; **not** the speckle, though it was credited with it for a while |
 | **`createImageBitmap` un-premultiplies the geom raster** | renderer | 103,221 splats moved >5% of their depth and **12,679 flung to the near plane**, keeping their own colour — bits of objects floating at arm's length over the whole frame |
 | **WebCodecs `ImageDecoder` returns WebP as YUV, so `copyTo` subsamples chroma** | renderer | geometry low-passed — splats drift toward their neighbours and take on their sizes and rotations. The whole room soft and subtly wrong, alpha-bias check silent throughout |
+| **Safari colour-manages the tables on decode**, ignoring `colorSpaceConversion: 'none'` | renderer, Safari only | the room soft and speckled with black where the field stops tiling. `/dev/splat` said `geom alpha bias intact` *and* `geom raster REWRITTEN in transit` — a colour transform does not touch alpha, which is that signature and no other |
+
+### Why the tables stopped being images
+
+The last row has no flag that fixes it. `UNPACK_COLORSPACE_CONVERSION_WEBGL` covers the
+upload and changed nothing, because the damage is done at decode; the files carry no ICC
+chunk to strip, and an untagged image is assumed sRGB and converted to the **display's**
+profile, so there is nothing to pre-compensate for either. Chrome's default is a no-op for
+these files, which is why it only ever appeared in Safari.
+
+So the tables leave the image pipeline: raw planes, deflated, inflated with
+`DecompressionStream`. Planar rather than interleaved because the channels are unrelated
+quantities and interleaving puts four uncorrelated byte streams under one entropy model —
+**8.69 MB over the three against 10.34 interleaved**, and against lossless WebP's 7.57 the
+**+1.12 MB is what exactness costs**. WebP's spatial predictors are genuinely good at this
+and no filter tried (up, left, either one planar) beat plain planar. A browser without
+`DecompressionStream` throws in `loadRaster` and gets the poster, the same ladder WebGL2 is
+already on.
+
+**The rule this settles: pictures go through the image decoder, tables do not.** `color`
+stays WebP because it really is a picture, and colour-managing it is the browser doing its
+job.
 
 ### The one that took a day
 

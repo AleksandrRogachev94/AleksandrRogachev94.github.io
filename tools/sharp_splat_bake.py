@@ -15,16 +15,18 @@ position floats per primitive because it cannot know where the splat came from. 
 Each splat belongs to a grid cell, so position is that cell's ray plus a small offset,
 and offsets are mostly zero and compress accordingly.
 
-**What is emitted** (all at grid x (grid * layers), layer 0 on top):
+**What is emitted** (all at grid x (grid * layers), layer 0 on top). Only `color` is an
+image: the other three are lookup tables indexed by splat, and a browser colour-manages
+anything it decodes as a picture - see write_table().
 
-  -splat-geom.webp   RG = signed offset from the cell centre in master px, square-companded
+  -splat-geom.bin    RG = signed offset from the cell centre in master px, square-companded
                      B  = disparity high 8 bits, A = low 7 bits biased into [128, 255].
-                     Lossless.
-  -splat-color.webp  RGB = colour from the degree-0 SH, A = opacity. Lossless - it is a
-                     lookup table indexed by splat, not a picture; see the write stage.
-  -splat-shape.webp  RGB = per-axis scale, log-quantised. Lossless.
-  -splat-quat.webp   RGBA = rotation quaternion, unsigned 8-bit, signed so A >= 128.
-                     Lossless.
+  -splat-color.webp  RGB = colour from the degree-0 SH, A = opacity. Lossless WebP - it is
+                     still a table, but it is also a picture; see the write stage.
+  -splat-shape.bin   RGB = per-axis scale, log-quantised, A = 255.
+  -splat-quat.bin    RGBA = rotation quaternion, unsigned 8-bit, signed so A >= 128.
+
+  The `.bin` files are `SPLT` + uint32 width + uint32 height + four planes, deflated.
   -splat.json        the manifest: grid, intrinsics, and every range needed to undo the
                      quantisation above.
 
@@ -65,6 +67,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import struct
 import sys
 import zlib
 from pathlib import Path
@@ -141,6 +144,51 @@ def despeckle(rgb: np.ndarray, grid: int, layers: int, min_dev: float = 0.18,
     print(f"  despeckle: replaced {touched:,} splats "
           f"({100 * touched / len(rgb):.3f}%) with their neighbourhood median")
     return out
+
+
+# The three rasters that are lookup tables rather than pictures. They ship as raw bytes,
+# not as images, because a browser is entitled to colour-manage anything it decodes as one -
+# see write_table().
+TABLES = ("geom", "shape", "quat")
+
+
+def write_table(path: Path, data: np.ndarray, shape: tuple[int, int]) -> int:
+    """Write one attribute table as deflated raw planes. Returns the byte count.
+
+    **Why these three are not images any more.** They were lossless WebP, which is exact on
+    disk and was still not enough: Safari applies a colour transform when it decodes them,
+    ignoring `colorSpaceConversion: 'none'` on `createImageBitmap`, and the files carry no
+    ICC chunk to strip - an untagged image is assumed sRGB and converted to the *display's*
+    profile, so there is nothing to pre-compensate for either. It reported `geom alpha bias
+    intact` (a colour transform does not touch alpha) together with `geom raster REWRITTEN
+    in transit`, which is that signature and no other. Setting
+    `UNPACK_COLORSPACE_CONVERSION_WEBGL` covers the upload and changed nothing, because the
+    damage is done at decode.
+
+    R and G here are sub-pixel offsets, B is the disparity's high byte, and in the other two
+    it is scale and rotation. A colour transform on those is a **transform on the geometry**:
+    the room comes back soft, with black speckle where the field stops tiling.
+
+    **So the rule is: pictures go through the image decoder, tables do not.** `color` stays
+    WebP - it really is a picture, and colour-managing it is the browser doing its job.
+
+    Planar, then deflate. The channels are unrelated quantities, so interleaving them puts
+    four uncorrelated byte streams under one entropy model: planar costs 2.89 MB against
+    3.98 interleaved for `geom`, and 8.69 against 10.34 over the three. Against lossless
+    WebP's 7.57 that is **+1.12 MB, which is what exactness costs** - WebP's spatial
+    predictors are genuinely good at this and no filter tried here (up, left, either one
+    planar) beat plain planar. `DecompressionStream('deflate')` inflates it in the browser;
+    a browser without it gets the poster, which is the same ladder WebGL2 is on.
+    """
+    rows, cols = shape
+    if data.shape[1] == 3:  # `shape` has no fourth channel; the GPU texture wants one.
+        data = np.concatenate([data, np.full((len(data), 1), 255, np.uint8)], axis=1)
+    planes = np.ascontiguousarray(data.reshape(rows, cols, 4).transpose(2, 0, 1)).tobytes()
+    blob = b"SPLT" + struct.pack("<II", cols, rows) + planes
+    path.write_bytes(zlib.compress(blob, 9))
+    if zlib.decompress(path.read_bytes()) != blob:
+        raise SystemExit(f"{path.name}: deflate did not round-trip")
+    return path.stat().st_size
 
 
 def check_variant_ply(name: str, path: Path, v: dict, base: dict,
@@ -407,18 +455,22 @@ def main() -> int:
                                  ("shape", shape, "RGB", lossless),
                                  ("quat", rot, "RGBA", lossless)] + [
                                  (n, d, "RGBA", lossless) for n, d in variant_rasters]:
-        path = args.out_prefix.with_name(f"{args.out_prefix.name}-splat-{name}.webp")
-        src = data.reshape(*shp, len(mode))
-        Image.fromarray(src, mode).save(path, format="WEBP", **kw)
-        back = np.array(Image.open(path).convert(mode))
-        err = int(np.abs(back.astype(int) - src.astype(int)).max())
-        if kw is lossless and err != 0:
-            raise SystemExit(f"{path.name}: lossless round trip changed bytes by {err} - "
-                             f"the WebP encoder is not preserving the raster")
-        total += path.stat().st_size
+        if name in TABLES:
+            path = args.out_prefix.with_name(f"{args.out_prefix.name}-splat-{name}.bin")
+            size, err = write_table(path, data, shp), 0
+        else:
+            path = args.out_prefix.with_name(f"{args.out_prefix.name}-splat-{name}.webp")
+            src = data.reshape(*shp, len(mode))
+            Image.fromarray(src, mode).save(path, format="WEBP", **kw)
+            back = np.array(Image.open(path).convert(mode))
+            err = int(np.abs(back.astype(int) - src.astype(int)).max())
+            if kw is lossless and err != 0:
+                raise SystemExit(f"{path.name}: lossless round trip changed bytes by {err} "
+                                 f"- the WebP encoder is not preserving the raster")
+            size = path.stat().st_size
+        total += size
         written.append(path)
-        print(f"  wrote {path.name:<35} {path.stat().st_size/1e6:6.2f} MB  "
-              f"round-trip max err {err}")
+        print(f"  wrote {path.name:<35} {size/1e6:6.2f} MB  round-trip max err {err}")
     print(f"  {'total':<42}{total/1e6:6.2f} MB")
 
     # ---- manifest ---------------------------------------------------------------------

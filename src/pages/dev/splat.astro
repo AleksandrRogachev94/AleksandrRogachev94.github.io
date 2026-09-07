@@ -310,6 +310,20 @@ async function raster(src) {
   const res = await fetch(src);
   if (!res.ok) throw new Error(`${src}: ${res.status}`);
   const buf = await res.arrayBuffer();
+  // The attribute tables are not images and neither decode path applies to them — see
+  // inflateTable() in splatRenderer.ts for why they stopped being WebP.
+  if (src.includes('.bin')) {
+    const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('deflate'));
+    const blob = new Uint8Array(await new Response(stream).arrayBuffer());
+    const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
+    const width = dv.getUint32(4, true), height = dv.getUint32(8, true), n = width * height;
+    const bytes = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      bytes[i*4] = blob[12+i]; bytes[i*4+1] = blob[12+n+i];
+      bytes[i*4+2] = blob[12+2*n+i]; bytes[i*4+3] = blob[12+3*n+i];
+    }
+    return { width, height, bytes, close() {} };
+  }
   if (+el('decode').value === 1 && 'ImageDecoder' in globalThis) {
     const dec = new ImageDecoder({ data: buf, type: 'image/webp' });
     const { image } = await dec.decode();
@@ -336,6 +350,9 @@ function upload(unit, r) {
   gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, t);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  // Same omission as splatRenderer.upload(): the default lets the browser
+  // colour-manage the upload, which rewrites geometry. See the note there.
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   if (r.bytes) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.width, r.height, 0,
                   gl.RGBA, gl.UNSIGNED_BYTE, r.bytes);
@@ -397,7 +414,7 @@ async function load(prefix) {
   M = await (await fetch(`${prefix}-splat.json`, { cache: 'no-cache' })).json();
   const v = M.version ? `?v=${M.version}` : '';
   const [g, c, s, q] = await Promise.all(['geom','color','shape','quat']
-    .map((n) => raster(`${prefix}-splat-${n}.webp${v}`)));
+    .map((n) => raster(`${prefix}-splat-${n}.${n === 'color' ? 'webp' : 'bin'}${v}`)));
   texs = [upload(0, g), upload(1, c), upload(2, s), upload(3, q)];
   N = M.count;
 
@@ -507,7 +524,7 @@ async function preloadQuat(prefix) {
   // raster unversioned and priming the cache under the wrong URL. load() re-reads it; it
   // is 500 bytes and revalidated either way.
   M = await (await fetch(`${prefix}-splat.json`, { cache: 'no-cache' })).json();
-  const q = await raster(`${prefix}-splat-quat.webp${M.version ? `?v=${M.version}` : ''}`);
+  const q = await raster(`${prefix}-splat-quat.bin${M.version ? `?v=${M.version}` : ''}`);
   const t = upload(3, q);
   qFull = readTex(t, q.width, q.height);
   gl.deleteTexture(t); q.close();

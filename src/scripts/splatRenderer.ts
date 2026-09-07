@@ -357,6 +357,9 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
 }
 
 /** A decoded raster, however it was decoded. */
+/** The rasters that are lookup tables rather than pictures. See `inflateTable`. */
+const TABLES = new Set(['geom', 'shape', 'quat']);
+
 interface Raster {
   width: number;
   height: number;
@@ -399,7 +402,61 @@ interface Raster {
  * same bytes, same shader, same canvas size. `verifyGeomRaster` is no longer the only
  * guard — see the checksum in `createSplatRenderer`.
  */
-async function loadRaster(res: Response, onBytes?: (n: number) => void): Promise<Raster> {
+/**
+ * The three attribute tables do not come through an image decoder at all.
+ *
+ * They used to: lossless WebP, exact on disk, and it was still not enough. Safari applies a
+ * colour transform on decode, ignoring `colorSpaceConversion: 'none'` above, and the files
+ * carry no ICC chunk to strip — an untagged image is assumed sRGB and converted to the
+ * *display's* profile, so there is nothing to pre-compensate for either. `/dev/splat` in
+ * Safari reported `geom alpha bias intact` (a colour transform does not touch alpha)
+ * together with `geom raster REWRITTEN in transit`, which is that signature and no other;
+ * setting `UNPACK_COLORSPACE_CONVERSION_WEBGL` covers the upload and changed nothing,
+ * because the damage is done at decode. R and G are sub-pixel offsets, B is the disparity's
+ * high byte, and in `shape` and `quat` it is scale and rotation — so the transform is a
+ * transform on the *geometry*, and it renders as a soft room with black speckle where the
+ * field stops tiling.
+ *
+ * **Pictures go through the image decoder; tables do not.** `color` stays WebP, because it
+ * really is a picture and colour-managing it is the browser doing its job.
+ *
+ * The file is `SPLT` + uint32 width + uint32 height + four planes, deflated. Planar because
+ * the channels are unrelated quantities and interleaving puts four uncorrelated byte streams
+ * under one entropy model: 8.69 MB over the three against 10.34 interleaved, and against
+ * lossless WebP's 7.57 the +1.12 MB is what exactness costs. A browser with no
+ * `DecompressionStream` throws here and gets the poster, the same ladder WebGL2 is on.
+ */
+async function inflateTable(buf: BlobPart): Promise<Raster> {
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('splat: no DecompressionStream, so the attribute tables cannot be read');
+  }
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream('deflate'));
+  const blob = new Uint8Array(await new Response(stream).arrayBuffer());
+  const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
+  if (dv.getUint32(0, false) !== 0x53504c54) {   // 'SPLT'
+    throw new Error('splat: attribute table has no SPLT header');
+  }
+  const width = dv.getUint32(4, true);
+  const height = dv.getUint32(8, true);
+  const n = width * height;
+  if (blob.byteLength !== 12 + n * 4) {
+    throw new Error(`splat: attribute table is ${blob.byteLength} bytes, expected `
+      + `${12 + n * 4} for ${width}x${height}`);
+  }
+  // Planar -> interleaved. ~1.2M iterations per table, a few ms, once at load.
+  const bytes = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    bytes[i * 4] = blob[12 + i];
+    bytes[i * 4 + 1] = blob[12 + n + i];
+    bytes[i * 4 + 2] = blob[12 + 2 * n + i];
+    bytes[i * 4 + 3] = blob[12 + 3 * n + i];
+  }
+  return { width, height, bytes, close: () => {} };
+}
+
+async function loadRaster(
+  res: Response, onBytes?: (n: number) => void, table = false,
+): Promise<Raster> {
   if (!res.ok) throw new Error(`failed to load ${res.url}: ${res.status}`);
 
   // Streamed rather than `res.arrayBuffer()` purely so the room can report how far along it
@@ -434,6 +491,8 @@ async function loadRaster(res: Response, onBytes?: (n: number) => void): Promise
     buf = await res.arrayBuffer();
   }
 
+  if (table) return inflateTable(buf);
+
   const bmp = await createImageBitmap(new Blob([buf]), {
     colorSpaceConversion: 'none',
     premultiplyAlpha: 'none',
@@ -447,6 +506,15 @@ function upload(gl: WebGL2RenderingContext, unit: number, r: Raster): WebGLTextu
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  // **The third flag, and the one this build was missing.** Its default is
+  // BROWSER_DEFAULT_WEBGL, which lets the browser colour-manage the upload — and three of
+  // these four rasters are quantised geometry, so a colour transform rewrites positions,
+  // depths, sizes and rotations. Chrome leaves these alone and Safari on a wide-gamut
+  // display does not: it reported `geom alpha bias intact` (a transform does not touch
+  // alpha) together with `geom raster REWRITTEN in transit`, which is that signature and
+  // no other. `colorSpaceConversion: 'none'` on createImageBitmap covers the decode; this
+  // covers the upload, and both are needed.
+  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   if (r.bytes) {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, r.width, r.height, 0,
                   gl.RGBA, gl.UNSIGNED_BYTE, r.bytes);
@@ -563,7 +631,7 @@ export async function createSplatRenderer(
   const names = ['geom', 'color', 'shape', 'quat'];
   if (opts.variant) names.push(`color-${opts.variant}`);
   const responses = await Promise.all(
-    names.map((n) => fetch(`${assetPrefix}-splat-${n}.webp${v}`)),
+    names.map((n) => fetch(`${assetPrefix}-splat-${n}.${TABLES.has(n) ? 'bin' : 'webp'}${v}`)),
   );
   const total = responses.reduce(
     (n, r) => n + Number(r.headers.get('content-length') ?? 0), 0,
@@ -575,7 +643,7 @@ export async function createSplatRenderer(
     : undefined;
 
   const [geomRaster, colorRaster, shapeRaster, quatRaster, variantRaster] =
-    await Promise.all(responses.map((r) => loadRaster(r, onBytes)));
+    await Promise.all(responses.map((r, i) => loadRaster(r, onBytes, TABLES.has(names[i]))));
 
   // Decoding and upload still take a beat after the last byte lands, so this is the bar
   // reaching full, not the room being drawable. The caller's own completion is what says

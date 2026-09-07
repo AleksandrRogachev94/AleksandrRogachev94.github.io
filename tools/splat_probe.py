@@ -28,12 +28,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
+import zlib
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 from sharp_splat_bake import uncompand
+
+
+def load_table(path: Path) -> np.ndarray:
+    """Read one `.bin` attribute table as (h, w, 4). See sharp_splat_bake.write_table()."""
+    blob = zlib.decompress(path.read_bytes())
+    if blob[:4] != b"SPLT":
+        raise SystemExit(f"{path.name}: not an attribute table")
+    w, h = struct.unpack("<II", blob[4:12])
+    planes = np.frombuffer(blob, np.uint8, offset=12).reshape(4, h, w)
+    return np.ascontiguousarray(planes.transpose(1, 2, 0))
 
 
 def main() -> None:
@@ -59,8 +70,7 @@ def main() -> None:
     args = ap.parse_args()
 
     man = json.loads((args.prefix.parent / f"{args.prefix.name}-splat.json").read_text())
-    geom = np.asarray(Image.open(args.prefix.parent / f"{args.prefix.name}-splat-geom.webp")
-                      .convert("RGBA"))
+    geom = load_table(args.prefix.parent / f"{args.prefix.name}-splat-geom.bin")
     grid, W, H = man["grid"], man["width"], man["height"]
 
     # Layer A is the top grid rows. Everything below is layer B - hidden geometry.
