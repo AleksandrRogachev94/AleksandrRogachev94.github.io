@@ -221,6 +221,35 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
 - SAM's automatic mode for layer assignment. At default settings it covered 32% of the
   frame and missed the desk, chair, printer and floor; prompted mode is the reliable one
   and fifteen objects is not many.
+- **Putting RoboTrail's dashboard recording in the rover's focus panel.** The demo the
+  project ships is a screen recording — camera feed left, occupancy grid right, an app title
+  bar with STOP and SHOW HUD — and full-bleed it drives the camera into a robot on the floor
+  and lands on a web app. This is the mistake the window already paid for and wrote down: no
+  cut, easing or veil schedule rescues a destination that is a picture of a computer screen.
+  The panel takes the camera pane cropped out of it (`crop=922:514:22:326`, natively 16:9,
+  letterbox stable to 2px across the run); the full dashboard moved to /robotrail, because a
+  dashboard is a thing you read and that is why it cannot be the thing you arrive at. The
+  crop is honestly weaker than the feeder's view in one way — the feeder's frame has the
+  tracker box and the 88% burned in, so it shows the *output*, and this shows the input. A
+  dashboard mode that drew the map over the camera feed would beat it; see VIEW in
+  src/data/robotrail.ts.
+- **Re-encoding the demo to make it smaller.** Measured, and every setting either grows the
+  file or costs real quality, because 592kbps for 1080p60 is already aggressive: 30fps at
+  crf 24 came back *larger* (5.5MB vs 4.5MB), and the 15% crf 28 saved cost SSIM 0.9872
+  mean / 0.9192 min and half the framerate. What was actually wrong was the atom order —
+  `moov` sat behind all 4.5MB of `mdat`, so nothing could play until the whole file landed.
+  `+faststart` fixed it at byte 32 with the video stream bit-identical. **Check atom order
+  before touching bitrate.** Cropping is the exception and it goes the other way: isolating
+  the camera pane *raised* the bitrate, because the dashboard is ~70% flat dark UI that
+  encodes for almost nothing, so full-length crops ran 5.2-8.7MB against the whole frame's
+  4.5MB. The panel loop is 20s for that reason, and the window was measured — mean absolute
+  frame delta puts the liveliest stretch at t=2..22.
+- **Using frame 0 as a video poster.** Right for the panel, where the clip autoplays and the
+  poster has to be what it exposes from, and wrong for the write-up, where frame 0 is an
+  empty grid the play button sits on. Do not pick it by metric either: drawn map pixels peak
+  at t=15 and then *fall*, because the map is discarded and rebuilt from corrected poses as
+  frontier cells resolve. t=58 has the most complete floorplan, a blank wall in the camera
+  pane and a `match=0%` readout. Look at the frames; t=30 is the one.
 - Buying resolution to fix smearing. Smearing is geometric — a 4K master yields sharper
   smears. Resolution fixes softness under magnification, which is a different row of the
   table in docs/PIPELINE.md.

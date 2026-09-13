@@ -71,8 +71,15 @@ what makes the parallax convincing.
 **v1:** monitor (software bench, containing flowlab), window (BirdLense), desk note
 (contact).
 
-**Deferred, already addressed:** RoboTrail on the work surface, guitar, sim rig, PC and
-keyboards. These props are **painted into the room art from day one, visible but
+**Shipped after v1:** RoboTrail, on the floor by the desk rather than the work surface —
+the reconstruction put it there and 3.18m of open floor is the cleanest depth reading in
+the room. Its destination is the rover's own autonomous run playing full-bleed, which
+makes it the first focus state outside the bench to claim the stage manager's single
+live slot. It shares the window's cut for a reason that only became true once the
+content existed: both grounds are footage off a machine with a camera on it, and
+`feed-expose` is a camera exposing. See src/data/robotrail.ts and RoverFocus.tsx.
+
+**Deferred, already addressed:** the guitar, sim rig, PC and keyboards. These props are **painted into the room art from day one, visible but
 inert** — three hotspots in a bare wide room would feel sparse, and a lived-in room
 where some things are not clickable *yet* is exactly right. New software projects need
 no room change at all — they are entries in the bench.

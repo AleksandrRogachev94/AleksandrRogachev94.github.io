@@ -8,31 +8,30 @@
  * destination without a URL that stands up on its own is the one thing rule 2 does not
  * allow, so the paragraph moved here rather than being deleted.
  *
- * **It is a stub, and it says so.** The project is real and the facts below are the ones
- * the repo and CLAUDE.md actually state; what does not exist yet is the write-up, the
- * pictures and the map. `status: building` is therefore true, and this page is the honest
- * version of "not finished" — a page that exists, is crawlable, and does not pretend. The
- * room's own placeholder (RoverFocus.tsx) says the same thing in the dark palette's voice.
+ * **No longer a stub**, which is what its own header asked for: it now reads
+ * `src/data/robotrail.ts`, the same module the panel reads. `status: building` went with the
+ * stub, the project being finished.
+ *
+ * Three audiences land here rather than in the focus state — a crawler, a visitor with
+ * JavaScript off, and anyone on `prefers-reduced-motion` who followed the link instead of
+ * the camera — and reading the same module is what guarantees they get the panel's facts.
+ *
+ * **What this page has that the panel does not**: the notes, the hardware photograph and the
+ * repo's derivations. An arrival is one ground and one claim; a page is an article. The
+ * photograph in particular cannot go in the panel — it is portrait, and the panel is a
+ * landscape viewport with a text column across its lower left.
  *
  * Mirrors `/birdlense` in structure and styling on purpose: same top-level position (both
  * are *physical* things with room addresses, so neither belongs under /software), same
- * `.project-page` shell, this destination's own accent. When the write-up lands, this file
- * grows a `src/data/robotrail.ts` the way BirdLense has one, and the room's placeholder
- * reads from it — one module, two surfaces, no drift.
+ * `.project-page` shell, this destination's own accent.
  */
 import '../styles/tokens.css';
+import { DEMO, HARDWARE, HEADLINE, LEDE, FACTS, NOTES, DOCS, REPO } from '../data/robotrail';
 
 const title = 'RoboTrail — Alex Rogachev';
-const description = 'A tracked rover that maps where it has been: graph SLAM on a '
-  + 'Raspberry Pi, closing loops against its own odometry.';
-
-/** The same four the room's placeholder shows, and every one is stated in CLAUDE.md. */
-const FACTS: readonly [string, string][] = [
-  ['form', 'tracked rover'],
-  ['platform', 'raspberry pi'],
-  ['mapping', 'graph slam'],
-  ['closes on', 'its own odometry'],
-];
+const description = 'A 3D-printed Raspberry Pi rover that maps a room by itself: '
+  + 'pose-graph SLAM, frontier exploration and ICP against a single laser rangefinder, '
+  + 'written from scratch in numpy and scipy.';
 ---
 
 <!doctype html>
@@ -53,17 +52,46 @@ const FACTS: readonly [string, string][] = [
         <h1>RoboTrail</h1>
         <p class="status">
           <span class="status__dot" aria-hidden="true"></span>
-          building
+          built
           <span class="status__sep">·</span>
-          Graph SLAM · Raspberry Pi
+          Pose-graph SLAM · ICP · Raspberry Pi 5
         </p>
       </header>
 
-      <p class="lede">
-        A tracked rover that builds a map of where it has been. It drives, keeps a graph of
-        the poses it thinks it passed through, and corrects the whole graph against its own
-        odometry when it arrives somewhere it has been before.
-      </p>
+      <p class="lede">{LEDE}</p>
+
+      {/*
+        The run, first on the page because it is the evidence. **Controls and no autoplay —
+        the opposite of the panel, deliberately.** There the clip is a ground and the arrival
+        is the point; here it is the subject, and someone reading should decide when it
+        starts and be able to scrub it. `preload="metadata"` for the same reason: the panel
+        is about to play regardless, this may never be played at all.
+
+        No `loop` and no `muted`, both of which the panel needs and this does not: the run
+        has an end and someone watching it should reach it, and the file carries no audio
+        track for `muted` to be about.
+      */}
+      <figure class="shot">
+        <video
+          src={DEMO.src}
+          poster={DEMO.poster}
+          aria-label={DEMO.label}
+          controls
+          playsinline
+          preload="metadata"
+          controlslist="nodownload"
+        ></video>
+        <figcaption>{DEMO.caption}</figcaption>
+      </figure>
+
+      <h2 class="sub">{HEADLINE}</h2>
+
+      {NOTES.map((n) => (
+        <section class="note">
+          <h3>{n.h}</h3>
+          <p>{n.p}</p>
+        </section>
+      ))}
 
       <dl class="rail">
         {FACTS.map(([k, v]) => (
@@ -71,19 +99,51 @@ const FACTS: readonly [string, string][] = [
         ))}
       </dl>
 
-      {/* The admission, and it is the whole point of shipping this page early: the rover has
-          a room address and a focus state, so it needs a URL that resolves. Saying "not yet"
-          on a real page beats a hotspot that leads nowhere. */}
-      <p class="note">
-        The write-up, the maps it has made and the source are still to come. The rover is on
-        the floor of the room above in the meantime.
+      {/* The machine. `width`/`height` are on the element rather than only in CSS so the
+          browser reserves the right box before the bytes arrive — it matters more here than
+          for BirdLense's landscape shots, because a 3:4 image reflows a page much further
+          when it pops in. Capped in `vh` below: unconstrained, a portrait photograph in a
+          76ch column is taller than any screen and becomes a scroll of its own. */}
+      <figure class="shot shot--tall">
+        <img
+          src={HARDWARE.src}
+          alt={HARDWARE.alt}
+          width={HARDWARE.width}
+          height={HARDWARE.height}
+          loading="lazy"
+          decoding="async"
+        />
+        <figcaption>{HARDWARE.caption}</figcaption>
+      </figure>
+
+      {/* The repo is half write-up, and that is the most credible thing about the project —
+          so it gets linked rather than described. See DOCS in src/data/robotrail.ts for why
+          EKF_GUIDE.md is not in this list. */}
+      <section class="docs">
+        <h3>How it was worked out</h3>
+        <p class="docs__lede">
+          The repository carries its own derivations and a stage-by-stage build log, which is
+          where the reasoning actually lives.
+        </p>
+        <ul>
+          {DOCS.map((d) => (
+            <li>
+              <a href={d.href} target="_blank" rel="noopener">{d.title}</a>
+              <span class="docs__note">{d.note}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <p class="links">
+        <a href={REPO} target="_blank" rel="noopener">Source on GitHub ↗</a>
       </p>
     </main>
 
     <style>
-      /* Matches src/pages/birdlense.astro and src/pages/software/flowlab.astro: a visitor
-       * who lands on any of them without going through the room should recognise them as
-       * the same kind of surface — the dark half of the palette, one accent. */
+      /* This page IS a focus state — dark half of the palette, this destination's accent.
+       * Matches src/pages/birdlense.astro deliberately: a visitor who lands on either
+       * without going through the room should recognise them as the same kind of surface. */
       .project-page {
         background: var(--focus-bg);
         color: var(--focus-ink);
@@ -109,18 +169,22 @@ const FACTS: readonly [string, string][] = [
         text-transform: uppercase;
         color: var(--focus-ink-soft);
       }
-      /* Hollow rather than filled, which is the one deliberate difference from /birdlense.
-       * That page's dot is solid because its status is `live`; this one is `building`, and a
-       * ring reads as pending without needing a second colour token. */
-      .status__dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        border: 1.5px solid var(--accent);
-      }
+      /* Solid, matching /birdlense. It was a ring while the status read `building`, because
+       * a hollow dot reads as pending without needing a second colour token. The project is
+       * finished, so it is filled. */
+      .status__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
       .status__sep { opacity: 0.5; }
 
       .lede { color: var(--focus-ink-soft); font-size: 1.05rem; margin: 20px 0 40px; }
+
+      /* The headline the room's panel leads with, demoted to a section head here. The page
+       * already has an `h1` — this is the same sentence doing a different job, introducing
+       * the notes rather than announcing the project. */
+      .sub { font-size: 1.25rem; margin: 48px 0 24px; }
+
+      .note { margin: 0 0 28px; }
+      .note h3 { font-size: 1.05rem; margin: 0 0 0.35em; }
+      .note p { margin: 0; color: var(--focus-ink-soft); line-height: 1.65; }
 
       .rail {
         display: grid;
@@ -137,7 +201,60 @@ const FACTS: readonly [string, string][] = [
       .rail dt { color: var(--focus-ink-soft); text-transform: uppercase; }
       .rail dd { margin: 0; }
 
-      .note { margin: 0; color: var(--focus-ink-soft); line-height: 1.65; }
+      /* Shared by the video and the photograph, so the two pieces of evidence on this page
+       * are framed identically. Same rule as /birdlense's `.shot`. */
+      .shot { margin: 0 0 40px; }
+      .shot img,
+      .shot video {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 1px solid var(--focus-line);
+        /* The video's letterbox and the photograph's unloaded box both show through as the
+         * page background otherwise, which reads as a hole in the layout. */
+        background: #000;
+      }
+      /* Portrait. Unconstrained it is 4/3 of the column's width tall — taller than most
+       * screens — so it is capped and centred, and `width: auto` is what stops the cap from
+       * being ignored. */
+      .shot--tall img {
+        max-height: 78vh;
+        width: auto;
+        max-width: 100%;
+        margin: 0 auto;
+      }
+      .shot figcaption {
+        margin-top: 10px;
+        font-size: 0.875rem;
+        line-height: 1.55;
+        color: var(--focus-ink-soft);
+      }
+
+      .docs { margin: 48px 0 0; }
+      .docs h3 { font-size: 1.05rem; margin: 0 0 0.35em; }
+      .docs__lede { margin: 0 0 18px; color: var(--focus-ink-soft); line-height: 1.65; }
+      .docs ul { margin: 0; padding: 0; list-style: none; }
+      .docs li {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: baseline;
+        padding: 10px 0;
+        border-top: 1px solid var(--focus-line);
+      }
+      .docs li a {
+        font: 12px/1.4 var(--font-mono);
+        letter-spacing: 0.04em;
+        color: var(--accent);
+        text-decoration: none;
+        text-underline-offset: 3px;
+      }
+      .docs li a:hover { text-decoration: underline; }
+      .docs__note { font-size: 0.875rem; color: var(--focus-ink-soft); }
+
+      .links { margin: 40px 0 0; font-size: 0.95rem; }
+      .links a { color: var(--accent); text-underline-offset: 3px; }
     </style>
   </body>
 </html>

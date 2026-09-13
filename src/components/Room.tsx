@@ -828,8 +828,9 @@ export default function Room() {
           // edges off the frame — it needs to know where the screen got to. A cut replaces the
           // frame outright, so there is nothing to grow out of and nothing to measure. The two
           // still get their own components rather than one parameterised panel: they cut by
-          // the same mechanism but they are not the same destination, and the rover's is a
-          // placeholder that should be easy to throw away (RoverFocus.tsx).
+          // the same mechanism but they are not the same destination. The window's ground is
+          // a still frame and the rover's is a running video that claims the stage manager's
+          // single slot (RoverFocus.tsx), which is a difference no shared prop list hides.
           if (focus.focusState === "window") {
             return (
               <WindowFocus
@@ -853,6 +854,10 @@ export default function Room() {
                 open={open}
                 atMs={noCamera ? 0 : cutMsFor(focus)}
                 lastInputRef={lastInputRef}
+                // The one prop the window does not take. The rover's ground is a video, so
+                // it needs to know whether it may play on arrival — and `noCamera` above
+                // cannot answer that, being equally true with motion allowed and no WebGL2.
+                reduced={reduced}
                 onExit={requestExit}
               />
             );

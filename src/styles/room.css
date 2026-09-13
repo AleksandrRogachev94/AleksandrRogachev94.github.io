@@ -956,13 +956,15 @@
  * Each destination gets its own verb. You sit down at the monitor; you look through the
  * window. That is what makes the room a place rather than a menu with good art.
  *
- * **The rover joins the cut rather than getting a third verb, for now.** Its destination is
- * a placeholder (RoverFocus.tsx), and the one thing this file has learned the hard way is
- * that the verb follows the destination — the window's arrival could not be fixed while the
- * destination was still a picture of a dashboard. So the rover takes the grammar that
- * claims the least: the takeover would say the rover is a screen, and the cut says only
- * that the room fell away. When the real map lands, this grouping is the thing to revisit,
- * not to preserve. */
+ * **The rover shares the cut, and it is no longer provisional.** This paragraph used to say
+ * the rover "joins the cut rather than getting a third verb, for now", because its
+ * destination was a placeholder and the lesson this file paid for is that the verb follows
+ * the destination. The destination now exists — the rover's own autonomous run, playing
+ * (RoverFocus.tsx) — and it wants this grammar on the merits rather than by default:
+ * `feed-expose` below is a camera exposing, and both grounds are now footage off a machine
+ * with a camera on it. What stays true is what the cut refuses to claim. A takeover would
+ * assert the object *becomes the viewport*, which is a thing a monitor is and a robot on
+ * the floor is not. */
 
 .focus--feed,
 .focus--rover {
@@ -976,12 +978,28 @@
   --t1: calc(var(--t0) + 320ms);
 }
 
-/* The rover has no picture to follow, so borrowing the feed's 320ms + 110ms wait (below)
- * bought nothing but a longer stretch of plain black — the feed's version of that wait is
- * masked by the photo visibly exposing underneath it; the rover's is not masked by anything.
- * A short settle beat, not the feed's exposure-length one. */
+/* The feeder's frame has its subject right of centre. See `.field__view`. */
+.focus--feed { --view-pos: 60% 45%; }
+
+/* The rover's ground is the dashboard. `--view-pos` biases the crop right, because the map
+ * is the right-hand pane and the column is on the left — on a narrow viewport the sides are
+ * cropped hard and the map is what must survive it.
+ *
+ * The offset hides the app title bar (`STOP`, `SHOW HUD`), which is the only part of the
+ * frame that reads as a web page and would sit directly under `.field__bar`. The video box
+ * is lifted above the panel's top edge and `.focus` clips it.
+ *
+ * **7%, against the bar's own 5.66%** (62px of 1096). `cover` scales by whichever axis needs
+ * it, so both the bar's rendered height and the video's top edge move with the viewport;
+ * checked at 16:9, 2560x1080 and 1000x900. Erring wide costs a few pixels of empty pane
+ * margin, erring narrow shows a sliver of bar — hence over. Done here rather than in a crop
+ * because re-encoding measured worse; see DEMO in src/data/robotrail.ts. */
 .focus--rover {
-  --t1: calc(var(--t0) + 90ms);
+  --view-pos: 66% 50%;
+}
+.focus--rover .field__view {
+  top: -7%;
+  height: 107%;
 }
 
 /* 1ms is a cut, not a fade. Written as an animation rather than a plain rule because `both`
@@ -1724,9 +1742,13 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  /* Slightly right of centre, because the bird is — so a viewport narrower than the frame
-   * crops the empty rail rather than the subject. */
-  object-position: 60% 45%;
+  /* **Per destination, because the two grounds are framed differently.** This was a flat
+   * `60% 45%` when the window was the only `.field`: the feeder's frame has the bird right
+   * of centre, so a viewport narrower than the frame should crop the empty rail rather than
+   * the subject. The rover's is a robot in the middle of a room and wants the middle, which
+   * is the default here. Each destination declares its own anchor rather than this rule
+   * guessing for both. */
+  object-position: var(--view-pos, 50% 50%);
 
   /* **The arrival, and the whole reason the cut stopped flashing.**
    *
@@ -1811,6 +1833,20 @@
   overflow-y: auto;
 }
 
+/* **Room for the native player chrome, on the two paths that show it**: `prefers-reduced-motion`,
+ * where a looping video is motion and the poster plus real controls is the honest
+ * degradation, and a refused autoplay, where the controls turn a dead-looking poster back
+ * into an offer. Both draw a control bar along the bottom edge of a full-bleed video —
+ * exactly where the column sits — so the column moves up instead of being read through it.
+ *
+ * A modifier rather than a `:has(video[controls])` selector. The condition is already known
+ * in RoverFocus.tsx, where it decides the `controls` attribute in the first place, and
+ * asking CSS to re-derive it from the DOM is a second source of truth for one boolean. */
+.field--player .field__read {
+  bottom: calc(clamp(24px, 5vh, 64px) + 56px);
+  max-height: 52vh;
+}
+
 .field__eyebrow {
   margin: 0 0 10px;
   font: 10px/1 var(--font-mono);
@@ -1862,8 +1898,17 @@
   font-size: 13px;
 }
 
-.field__links a { color: var(--accent); text-decoration: none; text-underline-offset: 3px; }
-.field__links a:hover { text-decoration: underline; }
+/* **Underlined at rest, not on hover.** Undecorated accent text sitting beside a mono rail
+ * of accent-coloured values reads as more labelling, so the one exit that is not the back
+ * button was invisible unless you guessed. Colour alone is not an affordance. Hover thickens
+ * the line rather than introducing it. */
+.field__links a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+.field__links a:hover { text-decoration-thickness: 2px; }
 
 /* The words follow the view in, once it is most of the way exposed. One stagger, not four:
  * the previous version staggered bar, caption, column and strip separately and the arrival
@@ -1879,64 +1924,16 @@
   to   { opacity: 1; transform: none; }
 }
 
-/* ---- the rover: RoboTrail (placeholder) ------------------------------------
- * Forty lines, on purpose. The approach is real and tuned (hotspots.ts); the destination is
- * not built yet, so this is the least CSS that can hold real words without pretending to be
- * finished. `rm` the block and the component together when the map arrives.
+/* ---- the rover: RoboTrail -------------------------------------------------
+ * This section held a `.bay` — a flex column of centred text — because the rover had no
+ * ground of its own and `.field__read` is pinned into the corner of a photograph. It has a
+ * ground now, so it is a `.field` like the window and every rule it needs is above this
+ * line. The old block asked that `field__` be renamed to something shared once a second
+ * destination used it; deliberately not done, because both destinations now use those
+ * pieces the same way, which makes `field__` the name of the shape rather than a loan.
  *
- * **It borrows the window's typographic pieces** — `.field__bar`, `.field__eyebrow`,
- * `.field__h`, `.field__lede`, `.field__rail`, `.field__links` — which are already plain
- * classes rather than descendants of `.field`, and were already shared with the bench in
- * two places (`.field__dot`, `.deck__spacer`). Rule 4 wants one dark palette across every
- * focus state, and re-declaring the same type scale under a second prefix is how two
- * palettes quietly become two. What is *not* borrowed is `.field__read`, because that one
- * is genuinely the window's: it is pinned low-left into the scrim's deepest corner so the
- * column sits where the picture is quiet. There is no picture here.
- *
- * When the real destination lands, whichever of those pieces it still uses should move out
- * of the `field__` prefix into a shared one. Doing that now would be renaming CSS to suit a
- * placeholder. */
-
-/* A flex column, not an overlay. `.field__read` gets to be `position: absolute` because it
- * is pinned into a corner of a photograph and nothing is under it; here an absolute layer
- * with `inset: 0` would sit on top of the bar and swallow the back button's clicks — a
- * panel whose only exit is Esc. The bar takes its height, the column takes the rest. */
-.bay {
-  display: flex;
-  flex-direction: column;
-}
-
-/* Centred, not pinned. The window's column hides in a corner of a picture; this panel has
- * nothing behind it, so the words are the whole frame and belong in the middle of it.
- * Capped in `ch` rather than px so it stays a readable measure at any viewport.
- *
- * `safe center`, matching `.deck__body`: on a viewport too short for the content, true
- * centring clips the top instead of scrolling to it. */
-.bay__read {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: safe center;
-  width: min(52ch, 84vw);
-  margin: 0 auto;
-  padding: 0 clamp(16px, 3.5vw, 40px) clamp(24px, 6vh, 72px);
-  overflow-y: auto;
-
-  /* The same single stagger the window uses: the words follow the cut by a beat, and here
-   * there is only one thing to stagger. `--t1` is `--t0 + 320ms`, from the shared
-   * `.focus--rover` rule above. */
-  animation: field-in 460ms var(--ease-camera) calc(var(--t1) + 110ms) both;
-}
-
-/* The admission. Deliberately quiet — soft ink, no accent, no border: it is a note about
- * the site's state, not a status the machine is reporting about itself. */
-.bay__note {
-  margin: 0 0 20px;
-  font: 11px/1.6 var(--font-mono);
-  letter-spacing: 0.08em;
-  color: var(--focus-ink-soft);
-}
+ * Its `--t1` override went too: the rover ran the words 90ms after the cut instead of 320ms,
+ * because with nothing behind them the wait was plain black. A picture masks it. */
 
 /* Narrow: the column goes under the subject rather than beside it, and the view crops to
  * the bird instead of the rail. */
@@ -1947,7 +1944,9 @@
     width: auto;
     max-height: 52vh;
   }
-  .field__view { object-position: 62% 40%; }
+  /* Tighter onto the bird as the frame narrows. Scoped to the window: the rover's ground
+   * is centred at every width. */
+  .focus--feed { --view-pos: 62% 40%; }
   .field__where { display: none; }
 }
 
@@ -1974,7 +1973,6 @@
    * them the panel is simply there, which is what reduced motion asks for. */
   .field__bar,
   .field__read,
-  .bay__read,
   .field__view { animation: none; }
   /* The exposure is the animation, so with it gone the view must be left somewhere sane —
    * otherwise `both` holds the opening keyframe and the arrival is a dim, blurred photograph

@@ -176,9 +176,12 @@ export const AMBIENT: readonly AmbientEffect[] = [
      * taking a frame, the rover is a machine idling. Same effect, different cadence, and the
      * cadence is what stops two lights in one room reading as one animation applied twice.
      *
-     * The rover has no focus state yet, and it lights anyway — deliberately. PLAN.md wants
-     * the room populated with things that are visible before they are finished, and a room
-     * where you can tell something is alive before you can enter it is exactly right.
+     * **Idling is the right word now that the destination exists.** This light shipped
+     * before the rover had a real focus state, on PLAN.md's argument that a room should be
+     * populated with things visible before they are finished. What it turned into is better
+     * than that: the panel you arrive at is the rover *driving*, so the breathing light in
+     * the room and the autonomous run behind the cut are the same machine in two states,
+     * and the room reads as the place the run happens in.
      */
     rect: [0.5026, 0.8592, 0.5220, 0.8749],
     // 3.18m, and clean — the rover sits in open floor with nothing crossing in front of it.

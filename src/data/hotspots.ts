@@ -204,8 +204,10 @@ export const HOTSPOTS: readonly Hotspot[] = [
     // magnification puts one splat at ~15 screen px — so the veil finishes at 0.80 and the
     // last fifth is a smear nobody reads.
     veil: { start: 0.35, full: 0.80 },
-    // Cuts, like the window and unlike the bench. See RoverFocus.tsx for why a placeholder
-    // gets to borrow a verb but not invent one.
+    // Cuts, like the window and unlike the bench, and it now shares that verb on the
+    // merits rather than as a placeholder's borrowing: both destinations are footage off a
+    // machine with a camera on it, and `feed-expose` is a camera exposing. See
+    // RoverFocus.tsx and "the cut" in room.css.
     focusState: 'rover',
   },
   {
