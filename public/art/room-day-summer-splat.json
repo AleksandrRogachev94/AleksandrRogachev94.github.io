@@ -1,32 +1,70 @@
 {
-  "version": "9567d9241e5f",
-  "geomAdler32": 2928095810,
+  "version": "d0375165e78f",
+  "geomAdler32": 3342679596,
   "variants": [
-    "night"
+    "night",
+    "fall",
+    "winter",
+    "winter-night",
+    "fall-night"
   ],
+  "variantGeom": [
+    "night",
+    "fall",
+    "winter",
+    "winter-night",
+    "fall-night"
+  ],
+  "variantAdler32": {
+    "night": 3287758511,
+    "fall": 2360560123,
+    "winter": 3349056041,
+    "winter-night": 660453063,
+    "fall-night": 4185595000
+  },
   "backgrounds": {
     "night": [
-      0.1875,
-      0.1133,
-      0.1341
+      0.1552,
+      0.1087,
+      0.1338
+    ],
+    "fall": [
+      0.3253,
+      0.1665,
+      0.1595
+    ],
+    "winter": [
+      0.2625,
+      0.2154,
+      0.213
+    ],
+    "winter-night": [
+      0.1541,
+      0.1353,
+      0.1678
+    ],
+    "fall-night": [
+      0.1353,
+      0.0722,
+      0.1066
     ]
   },
   "grid": 768,
   "layers": 2,
   "count": 1179648,
-  "width": 5504,
-  "height": 3072,
-  "fx": 4370.53076171875,
-  "cx": 2752.0,
-  "cy": 1536.0,
-  "dispLo": 0.009180811233818531,
-  "dispHi": 0.9618484377861023,
+  "width": 2752,
+  "height": 1536,
+  "fx": 2185.265380859375,
+  "cx": 1376.0,
+  "cy": 768.0,
+  "dispLo": 0.025223806500434875,
+  "dispHi": 0.9858155250549316,
   "offsetRange": 1100.0,
-  "scaleLogLo": -9.437727928161621,
-  "scaleLogHi": -0.15431402623653412,
-  "nearZ": 1.0396648645401,
-  "farZ": 108.92283630371094,
+  "scaleLogLo": -9.625974655151367,
+  "scaleLogHi": -1.23078191280365,
+  "nearZ": 1.0143885692450196,
+  "farZ": 39.6450868738927,
   "fovDeg": 38.72751260404481,
-  "maxLateralM": 0.11995407718115145,
-  "maxPushM": 0.155949729681015
+  "maxLateralM": 0.11703775791319114,
+  "maxPushM": 0.15215828538675294
 }

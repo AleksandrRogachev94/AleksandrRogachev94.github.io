@@ -28,6 +28,13 @@ def main() -> None:
                          "one of them can answer that for the whole frame.")
     ap.add_argument("--width", type=int, default=0, help="0 keeps the source width")
     ap.add_argument("--quality", type=int, default=90)
+    ap.add_argument("--poster-only", action="store_true",
+                    help="write only --master (and --picking-depth), never the layer plates. "
+                         "The SHARP_SPLAT build serves no plates, but this script finds them "
+                         "by globbing art/build - which is disposable and therefore keeps "
+                         "whatever an earlier LAYERED run left there. Without this flag, "
+                         "exporting one poster silently re-writes 2.6MB of plates into "
+                         "public/art/ that nothing loads and `git add` would commit.")
     ap.add_argument("--depth-scale", type=float, default=1.0,
                     help="depth resolution relative to colour. Half res was the default "
                          "on the argument that alpha, not depth, carries the silhouettes "
@@ -38,7 +45,8 @@ def main() -> None:
                          "~280 KB; revisit once the 4K master lands.")
     args = ap.parse_args()
 
-    plates = sorted(args.prefix.parent.glob(f"{args.prefix.name}-layer*[0-9].png"))
+    plates = ([] if args.poster_only
+              else sorted(args.prefix.parent.glob(f"{args.prefix.name}-layer*[0-9].png")))
     # Plates belong to the LAYERED build. The splat build has none - its geometry ships as
     # the four rasters tools/sharp_splat_bake.py writes - but it still needs the poster the
     # site shows without WebGL2 or under prefers-reduced-motion, so `--master` alone is a

@@ -2,22 +2,30 @@
  * Where the art actually is on screen, and how to turn a point on it into a point in the
  * room.
  *
- * The renderer reconstructs in the *art's* own frame and then fits it to whatever aspect
- * the canvas happens to be, width-locked: the art's full width always lands on screen, and
- * the vertical axis absorbs the mismatch — cropped top/bottom on a canvas wider than the
- * art, letterboxed top/bottom on one narrower (a phone in portrait). Expressed as a field
- * of view in roomRenderer.ts (`fovYProj`). Everything that has to line up with the painting
- * has to redo that same fit: hotspot buttons sitting over their objects, a click turned back
- * into a room coordinate, the takeover growing out of the screen's centre.
+ * The renderer reconstructs in the *art's* own frame and then fits it to whatever aspect the
+ * canvas happens to be. Everything that has to line up with the painting has to redo that
+ * same fit: hotspot buttons sitting over their objects, a click turned back into a room
+ * coordinate, the takeover growing out of the screen's centre.
  *
- * Width-locked rather than a true `object-fit: cover` (which would crop *either* axis,
- * whichever fits) because the room's hotspots are spread wide — 0.25 to 0.80 of the frame —
- * and only two objects sit in the vertical middle. Cropping width on a portrait phone
- * cropped those hotspots off-screen entirely; a phone is tall enough to spare that gets
- * back as harmless letterboxing instead.
+ * **Cover, capped** — `fitZoom` below. On a canvas wider than the art's 1.79:1 the art's full
+ * width lands on screen and the top and bottom are cropped, which is what it has always done.
+ * On a canvas *narrower* than that it now scales up until the height is covered too, up to a
+ * ceiling, and letterboxes only past that ceiling.
+ *
+ * It was width-locked with no zoom at all, and the reason was sound as far as it went: a true
+ * `object-fit: cover` crops whichever axis fits, and the room's hotspots are spread from x
+ * 0.246 (the window) to x 0.801 (the monitor), so on a portrait phone cover would take the
+ * window clean off the screen. What that argument missed is that the two cases are nothing
+ * alike in *degree*. A laptop window at 3:2 needs 1.12x to fill; a phone in portrait needs
+ * 3.9x. One is a couple of percent off each side, the other is most of the room. Refusing
+ * both cost every desktop visitor a mat above and below the picture — and a mat says
+ * "photograph on a page", where this wants to say "you are in the room".
+ *
+ * So the ceiling is the whole design, and `MAX_ZOOM` says where it comes from.
  *
  * Doing it in one place is the point. Three copies of this fit drift apart the first time
- * someone resizes the window to a shape nobody tested.
+ * someone resizes the window to a shape nobody tested — and there are four now, since the
+ * poster's is in CSS (`.room__still` in room.css) and cannot call this.
  */
 
 /** A rectangle on the art, normalised 0..1, origin top-left. Same convention as hotspots.ts. */
@@ -34,16 +42,41 @@ export interface ScreenRect {
 }
 
 /**
- * The art's placement inside a viewport of the given size: the size it is drawn at, and
- * where its top-left corner falls. Width always matches the viewport exactly (`left` is
- * always 0) — see the file header for why this is width-locked rather than true cover.
- * `top` is negative when the viewport is wide enough to crop the art vertically, positive
- * when it is narrow enough to letterbox it instead.
+ * **How far past the viewport's width the art is scaled, so that a viewport taller than the
+ * art fills instead of letterboxing.** 1 means the old width-locked fit.
+ *
+ * The ceiling is 1.25 — 10% of the width off each side — and it is set by the hotspots, not
+ * by taste. The leftmost is the window at x 0.246 and the rightmost the monitor at 0.801, so
+ * at the cap the visible band is 0.10 to 0.90 and the window still has 0.146 of frame outside
+ * it. That is margin enough that no reachable viewport puts a destination against the edge,
+ * let alone past it. 1.25 covers every viewport down to 1.433:1, which is every landscape
+ * desktop window including a deliberately tall one; below that — phones in portrait, which is
+ * where the width-locked fit was defending something real — the mat comes back and the room
+ * is centred in it.
+ *
+ * It is a mild win for the renderer too, not just a cosmetic one: cropping the sides moves the
+ * frame edge away from where lateral drift opens disocclusion, so the pixels most likely to
+ * show a hole are the first ones off screen.
+ */
+export const MAX_ZOOM = 1.25;
+
+export function fitZoom(viewW: number, viewH: number, imageAspect: number): number {
+  // What it would take to cover the height as well. Below 1 the viewport is already wider
+  // than the art, which crops top/bottom — the case that never needed a zoom.
+  const cover = (viewH * imageAspect) / viewW;
+  return Math.min(MAX_ZOOM, Math.max(1, cover));
+}
+
+/**
+ * The art's placement inside a viewport of the given size: the size it is drawn at, and where
+ * its top-left corner falls. `top` is negative when the art is cropped vertically and positive
+ * when it is letterboxed; `left` is zero or negative, and is only non-zero once `fitZoom` has
+ * scaled the art past the viewport's width.
  */
 function fit(viewW: number, viewH: number, imageAspect: number) {
-  const width = viewW;
-  const height = viewW / imageAspect;
-  return { width, height, left: 0, top: (viewH - height) / 2 };
+  const width = viewW * fitZoom(viewW, viewH, imageAspect);
+  const height = width / imageAspect;
+  return { width, height, left: (viewW - width) / 2, top: (viewH - height) / 2 };
 }
 
 /** A normalised rect on the art -> its box in CSS pixels inside the viewport. */
@@ -64,8 +97,8 @@ export function imageRectToScreen(
 
 /**
  * A point in CSS pixels inside the viewport -> normalised coordinates on the art. Values
- * outside 0..1 mean the point landed off the art — either on cropped-away image (wide
- * viewport) or on the letterboxed gap (narrow one).
+ * outside 0..1 mean the point landed on the letterboxed gap, which only exists below
+ * `MAX_ZOOM`'s cutoff aspect; cropped-away image simply cannot be pointed at.
  */
 export function screenToImage(
   x: number,
@@ -87,37 +120,40 @@ export function screenToImage(
  * never the canvas's — the reconstruction happens before any cropping, so this answer does
  * not change when the window does.
  *
- * `disparity` is the depth map's own units: 1 is nearest, 0 is farthest. Depth is
- * interpolated in inverse space because parallax goes as 1/z, so lerping 1/z is what makes
- * displacement linear in the model's output.
+ * `distanceM` is **metres**, and it used to be the bake's normalised disparity. That cost a
+ * live bug worth remembering: disparity is a position within `[1/farZ, 1/nearZ]`, so it is a
+ * property of *the bake's quantisation range* and not of the room. Re-locking the masters
+ * moved `farZ` from 98m to 14m — nothing in the room moved, the deepest thing in it did — and
+ * every authored number silently came to mean somewhere else. The feeder, authored at 8.31m,
+ * decoded as 5.70m and the camera stopped short of it in mid-air.
+ *
+ * Metres cannot do that. The room is metric because SHARP's output is, the distance to the
+ * feeder is a fact about the room, and a re-bake is now free to move the planes.
  */
 export function imagePointToWorld(
   nx: number,
   ny: number,
-  disparity: number,
-  opts: { fovDeg: number; nearZ: number; farZ: number; imageAspect: number },
+  distanceM: number,
+  opts: { fovDeg: number; imageAspect: number },
 ): Vec3 {
   const ndcX = nx * 2 - 1;
   const ndcY = 1 - ny * 2;
-  const invZ = 1 / opts.farZ + (1 / opts.nearZ - 1 / opts.farZ) * disparity;
-  const z = 1 / invZ;
+  const z = distanceM;
   const tanHalf = Math.tan((opts.fovDeg * Math.PI) / 180 / 2);
   return [ndcX * tanHalf * opts.imageAspect * z, ndcY * tanHalf * z, -z];
 }
 
 /**
- * An authored `disparity` as the reciprocal depth that `parallaxCoeff` multiplies against.
+ * An authored distance as the reciprocal depth that `parallaxCoeff` multiplies against.
  *
- * Every screen-space overlay glued to the room needs this exact number and no other part
- * of the world: the hotspot layer, and the ambient layer that sits beside it. It was
- * inlined in both until the second one existed, at which point two copies of one formula
- * were two chances for the layers to disagree about where a thing is.
+ * Now that the stored number is metres this is a reciprocal and nothing else, and `pinToArt`
+ * below is its only caller — it used to be exported, back when the three overlay layers each
+ * did their own placement and only shared this one step. It stays a named function because it
+ * is the one place that knows overlay parallax goes as 1/z, and `pinToArt` reads better for
+ * saying so than for a bare `1 / distanceM`.
  */
-export function reciprocalDepth(
-  disparity: number,
-  opts: { nearZ: number; farZ: number },
-): number {
-  return 1 / opts.farZ + (1 / opts.nearZ - 1 / opts.farZ) * disparity;
+function reciprocalDepth(distanceM: number): number {
+  return 1 / distanceM;
 }
 
 /**
@@ -125,9 +161,8 @@ export function reciprocalDepth(
  * the room parallaxes underneath.
  *
  * Three layers need exactly this and nothing else — hotspots, room controls, the ambient
- * tier — and it was written out in all three. Same argument as `reciprocalDepth` above, one
- * step later: three copies of one placement are three chances for the layers to disagree
- * about where a thing is.
+ * tier — and it was written out in all three: three copies of one placement are three chances
+ * for the layers to disagree about where a thing is.
  *
  * **`left`/`top`, never a transform.** A transform makes the element a stacking context, and
  * every one of these layers contains a `screen`-blended light that has to mix with the
@@ -139,10 +174,9 @@ export function reciprocalDepth(
  */
 export function pinToArt(
   box: ScreenRect,
-  disparity: number,
-  opts: { nearZ: number; farZ: number },
+  distanceM: number,
 ): { left: string; top: string; width: string; height: string } {
-  const invZ = reciprocalDepth(disparity, opts).toFixed(4);
+  const invZ = reciprocalDepth(distanceM).toFixed(4);
   return {
     left: `calc(${box.left}px + var(--par-x, 0) * ${invZ} * 1px)`,
     top: `calc(${box.top}px + var(--par-y, 0) * ${invZ} * 1px)`,
@@ -161,8 +195,8 @@ export function pinToArt(
  *
  * The slip is pure perspective and depends only on depth, so one pair of coefficients
  * serves every hotspot: multiply by the object's own `1/z` to get its offset in CSS px.
- * `imagePointToWorld` already turns a hotspot's `disparity` into exactly that reciprocal,
- * which is why the depth never has to be stored twice.
+ * `imagePointToWorld` already takes a hotspot's distance in the same units, which is why the
+ * depth never has to be stored twice.
  *
  * Returned as coefficients rather than applied here because the camera moves 60 times a
  * second and the rects do not: the caller writes these into two custom properties and the

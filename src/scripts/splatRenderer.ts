@@ -26,6 +26,7 @@
  */
 
 import type { Camera, RoomRenderer } from './roomRenderer';
+import { fitZoom } from './roomGeometry';
 
 /** The manifest `tools/sharp_splat_bake.py` writes beside the rasters. */
 export interface SplatManifest {
@@ -36,6 +37,18 @@ export interface SplatManifest {
   version: string;
   /** Adler-32 of the geom raster as written. See `loadRaster` for what it is guarding. */
   geomAdler32?: number;
+  /**
+   * Which variants ship their own `-splat-{geom,shape,quat}-<name>` as well as a colour.
+   *
+   * A name absent here is colour-only and keeps the day build's cloud underneath it — the
+   * original "one geometry, N colours" path, which is still right whenever a master really
+   * does only change the light. Winter is why the other path exists: its yard is bare
+   * branches against distant snow where summer's is a leafy canopy near the glass, and
+   * colours fitted for one landed on the other.
+   */
+  variantGeom?: readonly string[];
+  /** Adler-32 per variant geom table, same guard as `geomAdler32`. */
+  variantAdler32?: Readonly<Record<string, number>>;
   /**
    * Per-variant clear colour, linear 0-1 RGB, from the bake.
    *
@@ -142,8 +155,8 @@ uniform highp sampler2D uGeom;   // RG offset (companded), BA disparity (15-bit,
 uniform highp sampler2D uColor;  // RGB colour, A opacity
 uniform highp sampler2D uShape;  // RGB per-axis scale, log-quantised
 uniform highp sampler2D uQuat;   // RGBA rotation quaternion
-uniform highp sampler2D uColorB; // the variant being crossfaded to, same cloud
-uniform float uMix;              // 0 = uColor, 1 = uColorB
+// Dips to 0 and back while the room changes season. 1 in the steady state. See stepDip().
+uniform float uDim;
 
 uniform vec3 uCam;            // camera eye, in the reconstruction's own frame
 uniform mat3 uView;           // world -> camera rotation
@@ -190,12 +203,13 @@ void main() {
   // it. See the bake and loadRaster.
   float d15 = (floor(geom.b * 255.0 + 0.5) * 128.0
                + floor(geom.a * 255.0 + 0.5) - 128.0) / 32767.0;
+  vec2 off = vec2(uncompand(geom.r), uncompand(geom.g));
   float z = 1.0 / mix(uDisp.x, uDisp.y, d15);
 
   int cell = int(aIndex) % (uGrid * uGrid);
   vec2 cellPx = (vec2(float(cell % uGrid), float(cell / uGrid)) + 0.5)
                 / float(uGrid) * uPlate;
-  vec2 px = cellPx + vec2(uncompand(geom.r), uncompand(geom.g));
+  vec2 px = cellPx + off;
 
   // Master pixel + depth -> a point in the room. This is the reconstruction, and it is
   // exact: the bake stored where the splat actually projects, not where its cell is.
@@ -209,14 +223,12 @@ void main() {
   // the grid the rasters are addressed by stays intact. 2.00% of the scene, and reading
   // that here rather than after the projection drops their quads before they are
   // rasterised — the fragment shader would only have discarded them one pixel at a time.
-  // Every variant is baked off this same cloud and shares its opacity exactly - a variant
-  // changes the light on a surface, never whether the surface is there - so the mix touches
-  // colour only and the cull below is independent of it. The branch is on a uniform, so it
-  // is coherent across every invocation and costs nothing at uMix 0, which is the steady
-  // state: the second fetch happens only while a crossfade is actually running.
   vColor = texelFetch(uColor, tx, 0);
-  if (uMix > 0.0) vColor.rgb = mix(vColor.rgb, texelFetch(uColorB, tx, 0).rgb, uMix);
   if (vColor.a <= 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  // Applied after the cull, never before: uDim reaching 0 must dim the room, not decide that
+  // every splat in it is invisible geometry. The fragment stage emits premultiplied, so
+  // scaling the whole vector fades the splat toward whatever the frame was cleared to.
+  vColor *= uDim;
 
   float iz = 1.0 / p.z;
   vec2 centerPx = vec2(uFocal.x * p.x * iz + uCenter.x, uFocal.y * p.y * iz + uCenter.y);
@@ -626,12 +638,21 @@ export async function createSplatRenderer(
   // A variant named at construction rides in this same batch and is uploaded *as* the
   // colour raster, rather than being faded in afterwards — there is nothing to fade from on
   // the first frame, and a visitor arriving at midnight must not watch the day room resolve
-  // and then dissolve. The base raster is fetched anyway: it is what "back to day" fades to,
-  // and skipping it would make the first toggle the slow one.
-  const names = ['geom', 'color', 'shape', 'quat'];
+  // and then dissolve. The base colour raster is fetched anyway: it is what "back to day"
+  // fades to, and skipping it would make the first toggle the slow one.
+  //
+  // **Its geometry is the opposite call, and the asymmetry is the whole point.** A colour
+  // raster is 2.4MB and a geometry set is 8.5MB, so prefetching the day cloud behind a
+  // winter visitor would nearly double the first load to hold a season they may never ask
+  // for. Exactly one cloud is fetched here — the variant's if it brought one, otherwise the
+  // day's — and the other is fetched on the first switch, which is the moment it is wanted.
+  const openGeom = opts.variant && m.variantGeom?.includes(opts.variant)
+    ? `-${opts.variant}` : '';
+  const names = [`geom${openGeom}`, 'color', `shape${openGeom}`, `quat${openGeom}`];
   if (opts.variant) names.push(`color-${opts.variant}`);
   const responses = await Promise.all(
-    names.map((n) => fetch(`${assetPrefix}-splat-${n}.${TABLES.has(n) ? 'bin' : 'webp'}${v}`)),
+    names.map((n) => fetch(
+      `${assetPrefix}-splat-${n}.${TABLES.has(n.split('-')[0]) ? 'bin' : 'webp'}${v}`)),
   );
   const total = responses.reduce(
     (n, r) => n + Number(r.headers.get('content-length') ?? 0), 0,
@@ -643,7 +664,8 @@ export async function createSplatRenderer(
     : undefined;
 
   const [geomRaster, colorRaster, shapeRaster, quatRaster, variantRaster] =
-    await Promise.all(responses.map((r, i) => loadRaster(r, onBytes, TABLES.has(names[i]))));
+    await Promise.all(responses.map(
+      (r, i) => loadRaster(r, onBytes, TABLES.has(names[i].split('-')[0]))));
 
   // Decoding and upload still take a beat after the last byte lands, so this is the bar
   // reaching full, not the room being drawable. The caller's own completion is what says
@@ -659,16 +681,12 @@ export async function createSplatRenderer(
   }
   gl.useProgram(program);
 
-  // **Colour textures are keyed by variant, not by unit.** Each variant is uploaded once and
-  // kept; the units are just which two the shader is currently blending. Unit 1 is what the
-  // room is lit by now, unit 4 is what it is fading to, and `shown` — not the unit number —
-  // is the answer to "which lighting is on screen".
+  // **Colour textures are keyed by variant, not by unit.** Each is uploaded once and kept;
+  // unit 1 is whichever one the room is lit by now, and `shown` — not the unit number — is
+  // the answer to "which lighting is on screen". Opening on a variant means that variant *is*
+  // unit 1 from the first frame, so a visitor arriving at midnight never watches the day room
+  // resolve and then change.
   //
-  // Opening on a variant means that variant *is* unit 1 from the first frame, with the day
-  // raster parked as the thing "back to day" will fade to. With no variant loaded there is
-  // nothing to fade to yet, so unit 4 shares unit 1's texture: `uMix` is 0 and the shader
-  // never samples it, but a sampler still has to reference a complete texture for the draw
-  // to be valid.
   // **`textures` is indexed by texture unit, and that is load-bearing.** `draw()` rebinds
   // every unit from this array on every frame — `activeTexture(TEXTURE0 + i)` for
   // `textures[i]` — so the index *is* the unit. Building it as a plain list in upload order
@@ -676,17 +694,48 @@ export async function createSplatRenderer(
   // as log-quantised scale: the room came apart into radial spikes. Any binding done outside
   // this array lives exactly until the next frame.
   const textures: WebGLTexture[] = [];
-  textures[0] = upload(gl, 0, geomRaster);
-  textures[2] = upload(gl, 2, shapeRaster);
-  textures[3] = upload(gl, 3, quatRaster);
+
+  /**
+   * One reconstruction's three geometry tables, plus the order they must be drawn in.
+   *
+   * **The order belongs to the cloud, not to the renderer.** Splats are blended back to
+   * front, and the comment on the sort below explains why that order can be computed once
+   * and never again: the rig only ever translates the eye, so every splat's view depth
+   * shifts by the same amount and nothing can reorder. That argument is about the *camera*
+   * and survives intact — but it says nothing about swapping the cloud underneath it. Two
+   * seasons are two independent fits, so they disagree about what is behind what, and a
+   * winter room drawn in summer's order composites its yard in the wrong sequence.
+   */
+  interface Cloud {
+    geom: WebGLTexture;
+    shape: WebGLTexture;
+    quat: WebGLTexture;
+    order: Uint32Array;
+  }
+  const clouds = new Map<string | null, Cloud>();
 
   const colorTex = new Map<string | null, WebGLTexture>();
   colorTex.set(null, upload(gl, 1, colorRaster));
   if (variantRaster) colorTex.set(opts.variant!, upload(gl, 1, variantRaster));
 
   let shown: string | null = opts.variant ?? null;
+  /** Which cloud units 0/2/3 currently hold. Not always `shown`: a colour-only variant
+   *  keeps whatever cloud was already there, which is the point of that path. */
+  let cloudA: string | null = openGeom ? opts.variant! : null;
 
-  function bindColour(unit: 1 | 4, variant: string | null) {
+  /** Bind a cloud's three tables to the geometry units. */
+  function bindCloud(key: string | null) {
+    const c = clouds.get(key);
+    if (!c) return;
+    const [g0, g1, g2] = [0, 2, 3];
+    textures[g0] = c.geom; textures[g1] = c.shape; textures[g2] = c.quat;
+    for (const unit of [g0, g1, g2]) {
+      gl!.activeTexture(gl!.TEXTURE0 + unit);
+      gl!.bindTexture(gl!.TEXTURE_2D, textures[unit]);
+    }
+  }
+
+  function bindColour(unit: 1, variant: string | null) {
     // Through the array, so the rebind in draw() agrees. Binding the unit directly here and
     // leaving the array alone is the bug above, one frame later.
     textures[unit] = colorTex.get(variant)!;
@@ -694,11 +743,10 @@ export async function createSplatRenderer(
     gl!.bindTexture(gl!.TEXTURE_2D, textures[unit]);
   }
   bindColour(1, shown);
-  bindColour(4, shown);
 
   /**
-   * The clear colour follows whichever lighting is on screen, mixed the same way the colour
-   * rasters are so a crossfade does not step.
+   * The clear colour follows whichever lighting is on screen, and crosses over across the
+   * dip so the fade back up lands on the new season's ground rather than stepping onto it.
    *
    * `DEFAULT_BG` is `--room-bg`, and the base raster deliberately keeps it: it is what the
    * letterbox mat has always been and what `.room__still` agrees with. A variant overrides
@@ -708,24 +756,36 @@ export async function createSplatRenderer(
   function bgOf(variant: string | null): readonly [number, number, number] {
     return (variant && m.backgrounds?.[variant]) || DEFAULT_BG;
   }
-  function setClear(from: string | null, to: string | null, t: number) {
+  /**
+   * `t` crosses from one variant's background to another's; `dim` darkens the result.
+   *
+   * **`dim` is what makes the dip go through black**, and it is not decoration. Without it
+   * the bottom of the dip is whatever these two colours average to, and one of them is very
+   * often `DEFAULT_BG` — the base cloud has no measured entry, so summer day clears to the
+   * page's cream at 0.95 while every variant sits at 0.10-0.33. Any transition touching
+   * summer day therefore bottomed out on a bright field, and because `uDim` makes every
+   * splat translucent on the way down, that field came through the whole room at once: the
+   * objects did not fade away, they lit up. Dimming the clear colour by the same eased
+   * curve as the splats means both reach black together.
+   */
+  function setClear(from: string | null, to: string | null, t: number, dim = 1) {
     const a = bgOf(from);
     const b = bgOf(to);
-    gl!.clearColor(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
-                   a[2] + (b[2] - a[2]) * t, 1);
+    gl!.clearColor((a[0] + (b[0] - a[0]) * t) * dim, (a[1] + (b[1] - a[1]) * t) * dim,
+                   (a[2] + (b[2] - a[2]) * t) * dim, 1);
   }
 
-  (['uGeom', 'uColor', 'uShape', 'uQuat', 'uColorB'] as const).forEach((n, i) =>
+  (['uGeom', 'uColor', 'uShape', 'uQuat'] as const).forEach((n, i) =>
     gl.uniform1i(gl.getUniformLocation(program, n), i));
 
   const N = m.count;
   const u = Object.fromEntries(
     ['uCam', 'uView', 'uFocal', 'uCenter', 'uViewport', 'uDilate', 'uSigma', 'uGrid',
-     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog', 'uHalfSigma2', 'uMix']
+     'uPlate', 'uIntrin', 'uDisp', 'uOffsetRange', 'uScaleLog', 'uHalfSigma2', 'uDim']
       .map((n) => [n, gl.getUniformLocation(program, n)]),
   ) as Record<string, WebGLUniformLocation | null>;
 
-  gl.uniform1f(u.uMix, 0);
+  gl.uniform1f(u.uDim, 1);
 
   gl.uniform1i(u.uGrid, m.grid);
   gl.uniform2f(u.uPlate, m.width, m.height);
@@ -764,30 +824,37 @@ export async function createSplatRenderer(
   // Neither the 2.5m push nor the ambient sweep can reorder anything. So this runs once, at
   // load, and never again: no worker, no GPU radix sort, no per-frame readback. It does not
   // depend on the ambient amplitude, which is free to change.
-  const bytes = readTexture(gl, textures[0], geomRaster.width, geomRaster.height);
-  verifyGeomRaster(bytes, N);
-  // The general detector. The alpha-bias check above catches only what touches alpha, and a
-  // decoder was found that leaves alpha perfect while averaging every other channel with its
-  // neighbours (see loadRaster). This compares the bytes that actually reached the GPU
-  // against the bake's own Adler-32 of what it wrote — position-weighted on purpose, since
-  // neighbour-averaging is close to sum-preserving and a plain sum would not see it.
-  if (m.geomAdler32 !== undefined) {
-    const got = adler32(bytes, N * 4);
-    if (got !== m.geomAdler32) {
-      console.error(
-        `splat: the geom raster was rewritten between the file and the GPU `
-        + `(adler32 ${got}, expected ${m.geomAdler32}). Every splat's position, depth, size `
-        + `and rotation is suspect; the room will render soft and subtly wrong.`,
-      );
+  /**
+   * Verify a geom table off the GPU and compute the draw order it implies.
+   *
+   * Runs once per cloud, at the moment that cloud is uploaded — at construction for the one
+   * the room opens on, and on first switch for each of the others. Never per frame.
+   */
+  function ingestGeom(tex: WebGLTexture, w: number, h: number,
+                      expectAdler: number | undefined, label: string): Uint32Array {
+    const bytes = readTexture(gl!, tex, w, h);
+    verifyGeomRaster(bytes, N);
+    // The general detector. The alpha-bias check above catches only what touches alpha, and
+    // a decoder was found that leaves alpha perfect while averaging every other channel with
+    // its neighbours (see loadRaster). This compares the bytes that actually reached the GPU
+    // against the bake's own Adler-32 of what it wrote — position-weighted on purpose, since
+    // neighbour-averaging is close to sum-preserving and a plain sum would not see it.
+    if (expectAdler !== undefined) {
+      const got = adler32(bytes, N * 4);
+      if (got !== expectAdler) {
+        console.error(
+          `splat: the ${label} geom raster was rewritten between the file and the GPU `
+          + `(adler32 ${got}, expected ${expectAdler}). Every splat's position, depth, size `
+          + `and rotation is suspect; the room will render soft and subtly wrong.`,
+        );
+      }
     }
-  }
-  const depth = new Float32Array(N);
-  for (let i = 0; i < N; i++) {
-    const d15 = (bytes[i * 4 + 2] * 128 + bytes[i * 4 + 3] - 128) / 32767;
-    depth[i] = 1 / (m.dispLo + d15 * (m.dispHi - m.dispLo));
-  }
-  const order = new Uint32Array(N);
-  {
+    const depth = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const d15 = (bytes[i * 4 + 2] * 128 + bytes[i * 4 + 3] - 128) / 32767;
+      depth[i] = 1 / (m.dispLo + d15 * (m.dispHi - m.dispLo));
+    }
+    const out = new Uint32Array(N);
     // 16-bit counting sort on view depth, far to near. O(n), ~15ms for 1.2M.
     const BUCKETS = 65536;
     const counts = new Uint32Array(BUCKETS);
@@ -800,24 +867,52 @@ export async function createSplatRenderer(
     }
     let sum = 0;
     for (let i = 0; i < BUCKETS; i++) { const c = counts[i]; counts[i] = sum; sum += c; }
-    for (let i = 0; i < N; i++) order[counts[key[i]]++] = i;
+    for (let i = 0; i < N; i++) out[counts[key[i]]++] = i;
+    return out;
   }
+
+  clouds.set(cloudA, {
+    geom: upload(gl, 0, geomRaster),
+    shape: upload(gl, 2, shapeRaster),
+    quat: upload(gl, 3, quatRaster),
+    order: new Uint32Array(0),   // replaced immediately below; `upload` must run first
+  });
+  bindCloud(cloudA);
+  clouds.get(cloudA)!.order = ingestGeom(
+    textures[0], geomRaster.width, geomRaster.height,
+    cloudA === null ? m.geomAdler32 : m.variantAdler32?.[cloudA], cloudA ?? 'day');
+  const order = clouds.get(cloudA)!.order;
+
   // Drawn count, and which layer if one is soloed. Solo is the diagnostic that tells a
   // problem in SHARP's visible surface from one in its hidden layer: the two carry the
   // same scene, so an artifact that survives `L0` alone is in the reconstruction of what
   // you can see, and one that only appears with both is layer B showing through.
   let drawn = order;
-  gl.bindBuffer(gl.ARRAY_BUFFER, orderBuf);
-  gl.bufferData(gl.ARRAY_BUFFER, order, gl.STATIC_DRAW);
-
+  /** Set whenever something other than the camera changed and the next frame must redraw
+   *  even though the eye has not moved. Declared here because `setOrder` below runs at load,
+   *  before the frame loop's own state exists. */
+  let dirty = true;
+  /** Which layer is soloed, or -1. Survives a cloud swap, so a diagnostic stays on. */
+  let soloLayer = -1;
   const perLayer = m.grid * m.grid;
-  function solo(index: number) {
-    drawn = index < 0
-      ? order
-      : order.filter((i) => Math.floor(i / perLayer) === index);
+
+  /** Push the current cloud's draw order (respecting solo) into the instance buffer. */
+  function setOrder() {
+    const full = clouds.get(cloudA)!.order;
+    drawn = soloLayer < 0 ? full : full.filter((i) => Math.floor(i / perLayer) === soloLayer);
     gl!.bindBuffer(gl!.ARRAY_BUFFER, orderBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, drawn, gl!.STATIC_DRAW);
     dirty = true;
+  }
+  setOrder();
+
+  // Drawn count, and which layer if one is soloed. Solo is the diagnostic that tells a
+  // problem in SHARP's visible surface from one in its hidden layer: the two carry the
+  // same scene, so an artifact that survives `L0` alone is in the reconstruction of what
+  // you can see, and one that only appears with both is layer B showing through.
+  function solo(index: number) {
+    soloLayer = index;
+    setOrder();
   }
 
   gl.disable(gl.DEPTH_TEST);
@@ -898,48 +993,139 @@ export async function createSplatRenderer(
   const MOTION_EPS_PX = 0.4;
   let lastDrawAt = 0;
   const drawnEye: [number, number, number] = [0, 0, 0];
-  let dirty = true;
 
-  // ---- day/night crossfade -------------------------------------------------------------
+  // ---- changing the lighting -------------------------------------------------------------
   //
-  // A dissolve rather than a cut, because nothing in the room *moves* between variants — the
-  // same splats are simply lit differently — so a cut throws away the one thing that makes
-  // the swap read as the light changing rather than as the page reloading.
+  // **A dip, not a dissolve, and not a morph.** Both of those were built and neither survived
+  // contact with the seasons.
+  //
+  // A colour dissolve was right while a variant was `f_dc` alone on one shared cloud: nothing
+  // *moved* between variants, so crossfading two colour rasters read exactly as the light
+  // changing. That stopped being true the moment each season brought its own geometry — there
+  // are now two different rooms to get between, not two lightings of one.
+  //
+  // The obvious replacement was to interpolate them. Correspondence is exact (cell `i` is the
+  // same ray in every reconstruction) and the maths is clean: lerp disparity, lerp the offset,
+  // lerp log-scale, nlerp the rotation. It looked bad. Two independent fits disagree about a
+  // surface in ways that are individually tiny and collectively incoherent, so the midpoint is
+  // not a room halfway between two rooms — it is 1.2M splats each taking its own short wrong
+  // path, and the eye reads the whole window as boiling. Nothing about that is fixable by
+  // easing it differently; the interpolant is wrong, not its schedule.
+  //
+  // So: fade the room down, swap everything at the bottom, fade it back up. The swap is
+  // invisible because there is nothing on screen to see it happen to, it costs one uniform and
+  // no second set of texture units, and it cannot boil.
+  //
+  // **Through black, and it has to be black rather than "the background".** `uDim` scales the
+  // premultiplied output, so the bottom of the dip is whatever the frame was cleared to, and
+  // the first version left the clear colour at a lerp between the two rooms' own backgrounds
+  // on the theory that dipping through them was gentler than dipping through nothing. It is
+  // not gentler, it is broken: dimming a splat makes it *translucent* before it makes it
+  // invisible, so a bright clear colour arrives through every surface in the room at once and
+  // the objects appear to light up from inside on the way down. `setClear` takes the same
+  // eased curve for that reason — see the note there.
   //
   // 900ms matches the hotspot push in cameraRig.ts. Under `prefers-reduced-motion` it snaps,
   // which is the same contract as every other transition here: the room still changes, it
   // just does not animate.
   const FADE_MS = 900;
   const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
-  let mix = 0;
+  let dip = 0;
   let fadeTarget: string | null = null;
-  let fadingTo = false;
+  /** What the room was lit by when the dip started. `shown` changes at the bottom, so the
+   *  clear colour needs its own memory of where it came from. */
+  let fadeFrom: string | null = null;
+  /** The cloud the dip is heading for. Equal to `cloudA` for a colour-only variant. */
+  let fadeCloud: string | null = null;
+  let fading = false;
+  /** Whether the swap at the bottom of the dip has happened yet. */
+  let swapped = false;
 
-  function stepCrossfade(dt: number) {
-    if (!fadingTo) return;
-    mix = Math.min(1, mix + dt / FADE_MS);
-    // smoothstep: the linear ramp has a visible corner at both ends on a whole-frame
-    // luminance change, which is exactly what this is.
-    const eased = mix * mix * (3 - 2 * mix);
-    gl!.uniform1f(u.uMix, eased);
-    setClear(shown, fadeTarget, eased);
-    if (mix >= 1) settleCrossfade();
+  /**
+   * Which clouds stay resident, most recently used last.
+   *
+   * Three, and the number is chosen by what the controls actually do. One would refetch on
+   * every change; two would be enough for a season switch but not for the day/night toggle
+   * *inside* a season, which is the most-used control in the room and would then pay 8.5MB
+   * every press. Three holds a season's day and night plus whatever you came from, which
+   * covers every two-step path through the six states. Each is ~8.5MB of tables, so the cap
+   * is also what keeps this off the list of reasons a phone gives up.
+   */
+  const LIVE_CLOUDS = 3;
+  const lru: (string | null)[] = [cloudA];
+
+  function touchCloud(key: string | null) {
+    const at = lru.indexOf(key);
+    if (at >= 0) lru.splice(at, 1);
+    lru.push(key);
+    while (lru.length > LIVE_CLOUDS) {
+      const drop = lru.shift()!;
+      if (drop === cloudA || drop === fadeCloud) { lru.push(drop); break; }
+      const c = clouds.get(drop);
+      if (c) {
+        gl!.deleteTexture(c.geom); gl!.deleteTexture(c.shape); gl!.deleteTexture(c.quat);
+        clouds.delete(drop);
+      }
+    }
   }
 
-  /** The fade is over: promote the target to unit 1 and go back to a single texture fetch. */
-  function settleCrossfade() {
+  /** The bottom of the dip: everything changes at once, with nothing on screen to show it. */
+  function swap() {
+    swapped = true;
     shown = fadeTarget;
-    fadingTo = false;
-    mix = 0;
     bindColour(1, shown);
-    bindColour(4, shown);
+    if (fadeCloud !== cloudA) {
+      cloudA = fadeCloud;
+      bindCloud(cloudA);
+      setOrder();
+      touchCloud(cloudA);
+    }
+  }
+
+  function stepDip(dt: number) {
+    if (!fading) return;
+    // The frame loop skips a draw when the eye has not moved far enough to matter. This
+    // changes the picture without moving the camera at all, so it has to say so itself —
+    // otherwise a season change made while the room is still would land one frame at a time,
+    // whenever ambient drift happened to cross the threshold.
+    dirty = true;
+    dip = Math.min(1, dip + dt / FADE_MS);
+    if (dip >= 0.5 && !swapped) swap();
+    // **A V, and the polarity is the whole effect: 1 at both ends, 0 at the bottom.** This
+    // read `dip * 2` / `(1 - dip) * 2` for one release, which is the same triangle upside
+    // down — the room blacked out on the first frame, brightened to full, hard-cut to the
+    // new season at *full* brightness, faded to black and snapped back. Two visible steps
+    // with the swap sitting in the open between them, which is precisely what the dip is
+    // for hiding. A wrong sign here does not look like a tuning problem, it looks like a
+    // broken transition, so keep the endpoints asserted by eye: `lit` must be 1 when
+    // `dip` is 0 or 1, and 0 when `dip` is 0.5.
+    //
+    // smoothstep is applied to each half rather than to the whole ramp, so the corner at
+    // the bottom is the *swap* and not a kink in the easing — and because smoothstep is
+    // flat at both ends, the room lingers dark across the swap instead of touching zero
+    // for a single frame.
+    const lit = dip < 0.5 ? 1 - dip * 2 : dip * 2 - 1;
+    const eased = lit * lit * (3 - 2 * lit);
+    gl!.uniform1f(u.uDim, eased);
+    // The background crosses over once, linearly, across the whole dip, so the fade back up
+    // lands on the new season's colour — but it is *also* dimmed by the same eased curve, so
+    // the two meet at black in the middle rather than at some average of two room colours.
+    setClear(fadeFrom, fadeTarget, dip, eased);
+    if (dip >= 1) settleDip();
+  }
+
+  function settleDip() {
+    if (!swapped) swap();
+    fading = false;
+    fadeFrom = shown;
+    dip = 0;
     setClear(shown, shown, 0);
-    gl!.uniform1f(u.uMix, 0);
+    gl!.uniform1f(u.uDim, 1);
   }
 
   async function setVariant(name: string | null) {
     const target = name ?? null;
-    if (target === shown && !fadingTo) return;
+    if (target === shown && !fading) return;
     fadeTarget = target;
 
     if (!colorTex.has(target)) {
@@ -953,18 +1139,49 @@ export async function createSplatRenderer(
       if (!res.ok) return;                       // degrade to the lighting already on screen
       const raster = await loadRaster(res);
       if (!gl || fadeTarget !== target) { raster.close(); return; }
-      colorTex.set(target, upload(gl, 4, raster));
+      colorTex.set(target, upload(gl, 1, raster));
       raster.close();
     }
 
-    bindColour(1, shown);
-    bindColour(4, target);
-    mix = 0;
-    fadingTo = true;
+    // **And its geometry, when the variant brought its own.** A name absent from
+    // `variantGeom` is colour-only: it keeps whatever cloud is up, which is the original
+    // path and still the right one for a master that really did only change the light.
+    const ownGeom = target === null || (m.variantGeom?.includes(target) ?? false);
+    const wantCloud = ownGeom ? target : cloudA;
+    // Claimed before the fetch, not after: `touchCloud` refuses to evict the cloud a morph
+    // is heading for, and the fetch below is the window in which another switch could
+    // otherwise retire it.
+    fadeCloud = wantCloud;
+    if (ownGeom) touchCloud(target);
+    if (ownGeom && !clouds.has(target)) {
+      const suf = target === null ? '' : `-${target}`;
+      const res = await Promise.all(['geom', 'shape', 'quat'].map(
+        (t) => fetch(`${assetPrefix}-splat-${t}${suf}.bin${v}`)));
+      if (!res.every((r) => r.ok)) return;      // degrade to the lighting already on screen
+      const [gR, sR, qR] = await Promise.all(res.map((r) => loadRaster(r, undefined, true)));
+      if (!gl || fadeTarget !== target) { gR.close(); sR.close(); qR.close(); return; }
+      clouds.set(target, {
+        // Uploaded through unit 0 as scratch, never left bound there: `bindCloud` is what
+        // decides which cloud the geometry units actually hold, and it runs at the swap.
+        geom: upload(gl, 0, gR), shape: upload(gl, 0, sR), quat: upload(gl, 0, qR),
+        order: new Uint32Array(0),
+      });
+      clouds.get(target)!.order = ingestGeom(
+        clouds.get(target)!.geom, gR.width, gR.height,
+        target === null ? m.geomAdler32 : m.variantAdler32?.[target], target ?? 'day');
+      gR.close(); sR.close(); qR.close();
+    }
+
+    // Nothing is bound to the target yet: the swap happens at the bottom of the dip, where
+    // there is nothing on screen for it to happen to.
+    fadeFrom = shown;
+    dip = 0;
+    swapped = false;
+    fading = true;
     // A stopped renderer has no frame to ease in — a hidden tab, a mounted focus state, or
     // reduced motion. Land on the new lighting immediately so it is correct whenever the
     // room is next looked at.
-    if (!running || motionQuery.matches) settleCrossfade();
+    if (!running || motionQuery.matches) settleDip();
   }
 
   function frame(now: number) {
@@ -978,7 +1195,7 @@ export async function createSplatRenderer(
     const dt = last ? now - last : 16.7;
     last = now;
     opts.onBeforeFrame?.(dt);
-    stepCrossfade(dt);
+    stepDip(dt);
 
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
     // Scale the whole buffer down until it fits the budget. Applied to dpr rather than to
@@ -994,13 +1211,14 @@ export async function createSplatRenderer(
       dirty = true;
     }
 
-    // Width-locked fit, in the reconstruction's own pixel units — the same fit
-    // roomGeometry.fit() computes, so hotspot rects still land on their objects. Always
-    // scaling by the width ratio (never `Math.max` with the height ratio, which was true
-    // `object-fit: cover` and cropped the sides off on a canvas narrower than the master —
-    // exactly a phone in portrait, where the room's widest-spread hotspots sit) crops
-    // top/bottom on a wide canvas and letterboxes top/bottom on a narrow one instead.
-    const s = w / m.width;
+    // The fit, in the reconstruction's own pixel units — the same one roomGeometry.fit()
+    // computes, so hotspot rects still land on their objects. Cover, capped: the width ratio
+    // times `fitZoom`, which is 1 on a canvas wider than the master (crop top/bottom, as
+    // before) and scales up to MAX_ZOOM on a narrower one so the picture fills instead of
+    // sitting in a mat. Uncapped `Math.max` with the height ratio would be true
+    // `object-fit: cover` and would take the window hotspot off a portrait phone entirely;
+    // roomGeometry.ts's header has the numbers.
+    const s = (w / m.width) * fitZoom(w, h, m.width / m.height);
 
     const movedPx = Math.hypot(camera.eye[0] - drawnEye[0], camera.eye[1] - drawnEye[1],
                                camera.eye[2] - drawnEye[2]) * (m.fx * s) / m.nearZ;
@@ -1043,11 +1261,11 @@ export async function createSplatRenderer(
     gl!.viewport(0, 0, w, h);
     gl!.clear(gl!.COLOR_BUFFER_BIT);
 
-    // **Nothing draws outside the master's own rectangle.** The fit is width-locked
-    // (roomGeometry.ts's header says why), so a canvas taller than the art's 1.79:1 —
-    // any phone in portrait — letterboxes top and bottom, and those bands are outside
-    // what the camera ever saw. They are not empty: a splat carries an offset of up to
-    // ±1100 master px from its own cell, so the strays land past the frame edge and
+    // **Nothing draws outside the master's own rectangle.** The fit is capped cover
+    // (roomGeometry.ts's header says why), so a canvas taller than 1.433:1 — a phone in
+    // portrait, past where the zoom stops — still letterboxes top and bottom, and those
+    // bands are outside what the camera ever saw. They are not empty: a splat carries an
+    // offset of up to ±1100 master px from its own cell, so the strays land past the frame and
     // speckle the mat with dots at whatever depth they were assigned. There is no
     // reconstruction out there to make them right, and no clear colour hides them,
     // because they are drawn *over* it.
@@ -1124,10 +1342,14 @@ export async function createSplatRenderer(
     destroy() {
       renderer.stop();
       document.removeEventListener('visibilitychange', onVisibility);
-      // A Set because slots 1 and 4 of `textures` are aliases into `colorTex`, and every
-      // variant ever faded to lives only in the map.
-      new Set([...textures, ...colorTex.values()]).forEach((t) => gl!.deleteTexture(t));
+      // A Set because the eight texture slots are all aliases — 1 and 4 into `colorTex`, the
+      // geometry slots into `clouds` — and a resident cloud or variant that is not currently
+      // bound lives only in its map.
+      new Set([...textures, ...colorTex.values(),
+               ...[...clouds.values()].flatMap((c) => [c.geom, c.shape, c.quat])])
+        .forEach((t) => gl!.deleteTexture(t));
       colorTex.clear();
+      clouds.clear();
       gl!.deleteBuffer(cornerBuf);
       gl!.deleteBuffer(orderBuf);
       gl!.deleteVertexArray(vao);

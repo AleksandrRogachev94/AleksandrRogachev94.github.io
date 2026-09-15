@@ -2,8 +2,23 @@
 import '../styles/tokens.css';
 import '../styles/room.css';
 import Room from '../components/Room.tsx';
-import { SCENE } from '../data/scene';
+import { SCENE, stillFor } from '../data/scene';
 import { SITE, ROOM_LINKS, ELSEWHERE } from '../data/site';
+import { KEY as DAYLIGHT_KEY, NIGHT_FROM, NIGHT_UNTIL } from '../scripts/daylight';
+import { KEY as SEASON_KEY, WINTER_MONTHS, FALL_MONTHS, type Season } from '../scripts/season';
+import type { Daylight } from '../scripts/daylight';
+
+/**
+ * Every (season, time) pair resolved to its poster at build time, so the inline script below
+ * needs the two *inference* rules and no knowledge of the lighting matrix. `variantFor`'s
+ * gaps — fall night sharing summer's raster, spring mapping to summer — resolve here and stay
+ * in one place.
+ */
+const POSTERS = Object.fromEntries(
+  (['summer', 'fall', 'winter'] as Season[]).flatMap((s) =>
+    (['day', 'night'] as Daylight[]).map((d) => [`${s}-${d}`, stillFor(s, d)]),
+  ),
+);
 
 // The room is one screenful at the top of a real page — it is not a replacement for the
 // document and never hides it. What is below is deliberately *not* a text copy of the room:
@@ -26,11 +41,38 @@ const description = SITE.tagline;
       Room.tsx renders this image, but Room.tsx is a `client:load` island — so without this
       the browser cannot even *ask* for the poster until the React bundle has downloaded,
       parsed and mounted. That is the whole window the poster exists to fill. Preloading it
-      here costs one line and moves the first paint of the room to roughly first paint of
-      the page. The 8.9MB of splats behind it are deliberately not preloaded: they must not
-      compete with this for bandwidth.
+      moves the first paint of the room to roughly first paint of the page. The splats behind
+      it are deliberately not preloaded: they must not compete with this for bandwidth.
+
+      **It has to pick the right one of five, and only the browser knows which.** This page is
+      static, so the season and the hour are the visitor's, not the build's — and preloading
+      the summer-day poster unconditionally would spend 425KB on an image two thirds of the
+      year never shows, *and* leave the correct one to start downloading after hydration,
+      which is precisely the window this exists to close.
+
+      So: an inline script, running during parse, that writes the `href`. It duplicates the
+      two inference rules from scripts/daylight.ts and scripts/season.ts and nothing else —
+      the thresholds and storage keys are interpolated from those modules, and the matrix is
+      resolved into POSTERS above, so there is no second copy of any decision here. The
+      `<noscript>` fallback is the base poster, which is also what a visitor with no JS gets
+      from the island: the room below never hydrates, so the flat image is the whole room and
+      summer-day is the right thing for it to be.
     */}
-    <link rel="preload" as="image" href={SCENE.still} fetchpriority="high" />
+    <link id="room-poster" rel="preload" as="image" href={SCENE.still} fetchpriority="high" />
+    <script
+      is:inline
+      set:html={`(function(){try{
+  var P=${JSON.stringify(POSTERS)};
+  var g=function(k,ok){try{var v=localStorage.getItem(k);return ok.indexOf(v)<0?null:v}catch(e){return null}};
+  var n=new Date(),m=n.getMonth(),h=n.getHours();
+  var s=g(${JSON.stringify(SEASON_KEY)},['summer','fall','winter'])||
+    (${JSON.stringify(WINTER_MONTHS)}.indexOf(m)>=0?'winter':${JSON.stringify(FALL_MONTHS)}.indexOf(m)>=0?'fall':'summer');
+  var d=g(${JSON.stringify(DAYLIGHT_KEY)},['day','night'])||
+    (h>=${NIGHT_FROM}||h<${NIGHT_UNTIL}?'night':'day');
+  var href=P[s+'-'+d];
+  if(href)document.getElementById('room-poster').href=href;
+}catch(e){}})();`}
+    />
     <title>{title}</title>
     <meta name="description" content={description} />
   </head>

@@ -1,10 +1,20 @@
 /**
  * The room's ambient audio — the thing behind the speaker.
  *
- * **Off by default, and that is not a preference.** Browsers refuse to start audio without
- * a user gesture, so "on by default" is not implementable even if it were wanted; and
- * unsolicited sound is the fastest way to lose a visitor regardless. One click starts it and
- * the choice is remembered.
+ * **Off on every visit, and that is not a preference either.** Browsers refuse to start audio
+ * without a user gesture, so "on by default" is not implementable even if it were wanted; and
+ * unsolicited sound is the fastest way to lose a visitor regardless. One click starts it, and
+ * the next page load starts from silence again.
+ *
+ * **The preference used to be remembered in `localStorage` and it is not any more.** The
+ * argument for it was that a return visit could *arm* the resume and let the browser refuse —
+ * and on the browsers that refuse, that is exactly what happened and it was harmless. The
+ * problem is the browsers that do not: Chrome grants autoplay to an origin the visitor has
+ * played media on before, so the one visitor guaranteed to have earned that grant — the person
+ * who liked the loop enough to turn it on — is the one who gets sound with no gesture. A
+ * preference that only takes effect where it is least wanted is not a feature. It also made
+ * the speaker's light unexplainable: the LED could be lit at load with nothing audible, and
+ * there was no way for the visitor to tell that from a bug.
  *
  * **Nothing is fetched until that click.** The `<audio>` element is created on first play,
  * not at mount, so a visitor who never touches the speaker never downloads the loop. That is
@@ -17,10 +27,9 @@
  * background tab is exactly the failure the rule exists to prevent. `registerAmbient` is the
  * hook stage.ts already carries for this, and it is the only member.
  *
- * **A remembered preference is armed, not obeyed.** On a return visit this tries to resume
- * and will usually be refused, because a page load is not a gesture. When that happens the
- * light stays off and the preference is left alone, so the next click picks it back up.
- * Degrade explicitly: the caller is told what actually happened, never what was asked for.
+ * **The caller is told what actually happened, never what was asked for.** `toggle()` resolves
+ * to what is playing afterwards, which is not always what was requested — a missing file and a
+ * codec the browser will not take both land in the same `catch`. Degrade explicitly.
  */
 
 import { registerAmbient } from './stage';
@@ -41,14 +50,12 @@ import { registerAmbient } from './stage';
  * likely to be refused — and that is survivable here in a way it would not be anywhere else
  * on the site: a media element whose resource fails to load rejects `play()` with
  * NotSupportedError, which lands in the same `catch` as a missing gesture, so the light
- * stays off and the stored preference is left alone. **A refusal is already a first-class
+ * simply stays off. **A refusal is already a first-class
  * outcome of this module**, which is why it needs no format detection to go with it. If it
  * turns out to be refused on a browser worth caring about, the fix is a second file and a
  * `canPlayType` check here — not a change to anything that calls this.
  */
 const SRC = '/audio/room-loop.opus';
-
-const KEY = 'room:audio';
 
 /** Well under the room's own presence. This is furniture, not a soundtrack. */
 const VOLUME = 0.3;
@@ -62,19 +69,8 @@ export interface RoomAudio {
    * always what was asked: the file may be missing, or the browser may refuse.
    */
   toggle(): Promise<boolean>;
-  /** Whether a previous visit left it on. Read once, at mount. */
-  remembered(): boolean;
   dispose(): void;
 }
-
-const readPref = (): boolean => {
-  // Private mode and disabled storage both throw rather than returning null.
-  try { return localStorage.getItem(KEY) === 'on'; } catch { return false; }
-};
-
-const writePref = (on: boolean): void => {
-  try { localStorage.setItem(KEY, on ? 'on' : 'off'); } catch { /* nothing to do */ }
-};
 
 export function createRoomAudio(): RoomAudio {
   let el: HTMLAudioElement | null = null;
@@ -145,15 +141,9 @@ export function createRoomAudio(): RoomAudio {
 
   return {
     async toggle() {
-      if (wanted) { stop(); writePref(false); return false; }
-      const on = await start();
-      // Only a *successful* start is worth remembering. Writing "on" after a refusal would
-      // make every subsequent page load try and fail, which is a preference that never
-      // takes effect and cannot be turned off.
-      if (on) writePref(true);
-      return on;
+      if (wanted) { stop(); return false; }
+      return start();
     },
-    remembered: readPref,
     dispose() {
       stopRamp();
       unregister?.();

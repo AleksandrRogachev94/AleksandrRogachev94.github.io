@@ -29,8 +29,9 @@ pnpm-debug.log*
 tools/.venv/
 tools/__pycache__/
 
-# everything tools/ derives from the master (see docs/SCENE.md).
-# art/ itself keeps only the four authored inputs; art/build/ regenerates from them.
+# everything tools/ derives from the masters (see docs/SCENE.md).
+# art/ itself keeps only what a hand or a generator produced - the six masters, hotspots.json,
+# masks-manual/ and fills/; art/build/ regenerates from them and is safe to delete.
 art/build/
 
 # SHARP's reconstruction. 63MB, and a tool output rather than an authored input - the

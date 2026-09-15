@@ -82,8 +82,8 @@ export interface RoomControl {
    * is a two-number edit and nothing else depends on it.
    */
   ledRect: NormRect;
-  /** Depth in the map's own units (1 near, 0 far), so the overlay parallaxes with the art. */
-  disparity: number;
+  /** Distance in metres, so the overlay parallaxes with the art. See `Hotspot.distanceM`. */
+  distanceM: number;
 }
 
 export const CONTROLS: readonly RoomControl[] = [
@@ -121,6 +121,6 @@ export const CONTROLS: readonly RoomControl[] = [
     ledRect: [0.4296, 0.5368, 0.4322, 0.5393],
     // 4.40m, and clean: p25 0.221 / p75 0.229 across three probes, because the speaker is a
     // solid box with nothing crossing in front of it. tools/splat_probe.py.
-    disparity: 0.227,
+    distanceM: 4.46,
   },
 ];

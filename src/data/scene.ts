@@ -21,6 +21,9 @@
  * is looking at.
  */
 
+import type { Daylight } from '../scripts/daylight';
+import type { Season } from '../scripts/season';
+
 export interface SceneLayer {
   colorSrc: string;
   depthSrc: string;
@@ -60,19 +63,25 @@ export interface SceneBuild {
   /** Directory + basename the splat bake wrote. `splat` builds only. */
   assetPrefix?: string;
   /**
-   * Extra colour rasters that share this build's geometry, as `-splat-color-<name>.webp`.
-   * `splat` builds only.
+   * The lighting variants this build ships, as a `(season, time)` matrix — see `variantFor`.
    *
-   * **One geometry, N colours.** Each variant is its own SHARP reconstruction of the same
-   * room under different light, and only its `f_dc` is taken — position, size, rotation and
-   * opacity all stay this build's. So a variant costs one extra ~2.4MB raster rather than a
-   * second 12MB bake, every authored number in hotspots.ts, ambient.ts and this file stays
-   * valid across all of them, and a crossfade dissolves between two colours instead of
-   * swimming between two clouds.
+   * **Each is its own SHARP reconstruction of the same room under different light**, and
+   * ships its own colour *and* geometry: `-splat-color-<name>.webp` plus
+   * `-splat-{geom,shape,quat}-<name>.bin`, about 11MB a season. Only one is ever downloaded,
+   * so the initial load is unchanged — a December visitor fetches winter's cloud instead of
+   * summer's, not as well as.
    *
-   * Inferring a variant's colours from a photograph of it was built and removed; see
-   * docs/SCENE-SPLAT.md, "Do not reopen". Adding a season means adding a master *and*
-   * running SHARP on it.
+   * It was colour only for most of this build's life, on the argument that one cloud plus N
+   * colours keeps every authored number valid and dissolves rather than swims. That holds
+   * exactly while a variant master relights surfaces without *moving* them, and winter broke
+   * it: its yard is bare branches against distant snow where summer's is a leafy canopy near
+   * the glass. The colour-only path still exists for a master that really did only change the
+   * light — a name the bake's manifest lists in `variants` but not in `variantGeom`.
+   *
+   * Every cloud is quantised against one shared range, so `nearZ`/`farZ` describe the whole
+   * bake rather than whichever master was the `--ply`. Switching between two of them is a dip
+   * — fade down, swap, fade up — never an interpolation; see docs/SCENE-SPLAT.md for why the
+   * morph that looked obvious was built and thrown away.
    */
   variants?: readonly string[];
   /** Whole-frame plate for no-WebGL2 and prefers-reduced-motion. */
@@ -196,20 +205,88 @@ export const SHARP_SPLAT: SceneBuild = {
   id: 'splat',
   kind: 'splat',
   assetPrefix: ART,
-  variants: ['night'],
+  // Five, which is every cell of the 3x2 lighting matrix except summer day — and summer
+  // day is the base raster, so the matrix is now fully covered with no cell borrowing
+  // another's picture. See `variantFor`.
+  //
+  // Each is a full reconstruction: its own colour *and* its own geometry, ~8.5MB of
+  // geometry plus ~2.4MB of colour apiece. See docs/SCENE-SPLAT.md; the short version is
+  // that a variant may relight any surface but may not *move* one, and winter's yard
+  // moved — bare branches where summer has canopy. Winter now moves something indoors too
+  // (a throw over the chair), which is legal for the same reason and constrained only by
+  // the rects in hotspots.ts, controls.ts and ambient.ts, which every cloud shares.
+  //
+  // **A visitor still downloads exactly one cloud.** These are fetched on switch, so the
+  // count here costs deploy size, not load time.
+  variants: ['night', 'fall', 'winter', 'winter-night', 'fall-night'],
   still: `${ART}.webp`,
-  variantStill: { night: '/art/room-night-summer.webp' },
-  width: 5504,
-  height: 3072,
-  // Straight out of the PLY. The room really is 1.04m to 108.9m deep.
-  nearZ: 1.040,
-  farZ: 108.92,
+  variantStill: {
+    night: '/art/room-night-summer.webp',
+    fall: '/art/room-day-fall.webp',
+    winter: '/art/room-day-winter.webp',
+    'winter-night': '/art/room-night-winter.webp',
+    'fall-night': '/art/room-night-fall.webp',
+  },
+  width: 2752,
+  height: 1536,
+  // Straight out of the bake's manifest, and now spanning **every** reconstruction in the
+  // bake rather than whichever one was the `--ply`. That is what stopped these from being a
+  // trap: they were per-file, so re-locking the masters moved `farZ` 98m → 14m and silently
+  // changed what every authored depth in src/data meant — the feeder, mapped at 8.3m, began
+  // decoding as 5.7m and the camera stopped short of it in mid-air. Those are metres now
+  // (roomGeometry.ts) and this is one shared range (encode() in the bake), so a re-bake can
+  // move the planes freely — and they do move, by a lot. farZ is whatever the *furthest*
+  // thing any of the six reconstructions saw, so it tracks the most open yard in the set:
+  // summer alone gives ~14m, one winter master whose bare branches showed distant sky took
+  // it to 125m, and regenerating that master brought it back to 40m. Do not hand-tune it or
+  // treat a change in it as a regression; copy what the bake printed.
+  //
+  // It is also cheaper to get wrong than it looks. The quantisation is on *disparity*, so
+  // the far plane stretching 9x moved p99 depth error inside 3m from 0.110mm to 0.121mm.
+  // What is *not* cheap is disagreeing with the manifest, which is why these are copied
+  // rather than rounded.
+  nearZ: 1.014,
+  farZ: 39.645,
   fovDeg: 38.73,
   // ml-sharp's own budget (compute_max_offset): 8% of the image diagonal of sweep at the
-  // nearest content's distance. `ROOM_TUNING`'s ambient peaks at 0.115 against this — see
-  // cameraRig.ts, which measured the disocclusion at each offset rather than guessing.
-  excursion: 0.120,
+  // nearest content's distance, printed by the bake as `maxLateralM`. `ROOM_TUNING`'s ambient
+  // peaks at 0.115 against this — see cameraRig.ts, which measured the disocclusion at each
+  // offset rather than guessing.
+  excursion: 0.117,
 };
+
+/**
+ * Which colour raster a (season, time-of-day) pair draws — the room's lighting matrix.
+ *
+ * **Three seasons and two times is six cells, and every one of them now has its own
+ * reconstruction.** Summer day is the base and needs no variant; the other five are named
+ * here. `null` means the base raster — already on the GPU — so summer day costs no fetch.
+ *
+ * **Fall night used to fall back to summer's `night`, and that was wrong twice over.** The
+ * argument for the fallback was that nothing separating fall from summer — a gold canopy,
+ * leaf drift, spent beds — survives being in deep shadow, so the picture would be the same
+ * dark blue yard either way. Two things defeated it. The smaller one is that a canopy still
+ * reads warm-brown rather than cool-green in silhouette, and fallen leaves near the house
+ * catch the window spill and are unmistakable. The larger one arrived with per-variant
+ * geometry: the fallback no longer handed a fall visitor summer's *colours*, it handed them
+ * summer's *shape* — a leafy crown where their season has a thinning one. A colour
+ * compromise is a judgement call; a geometry compromise is a wrong room.
+ *
+ * Spring earns no master at all and maps to summer. It would be a sixth reconstruction to
+ * say "green, slightly paler", which is the one seasonal difference the eye cannot find
+ * through a window at this size — and unlike fall night, spring's *geometry* really is
+ * summer's, so the fallback costs nothing but a name.
+ */
+export function variantFor(season: Season, daylight: Daylight): string | null {
+  if (daylight === 'night') return season === 'summer' ? 'night' : `${season}-night`;
+  return season === 'summer' ? null : season;
+}
+
+/** The flat poster for that same pair, for the load, no-WebGL2 and reduced motion. */
+export function stillFor(season: Season, daylight: Daylight): string {
+  const v = variantFor(season, daylight);
+  return (v && SHARP_SPLAT.variantStill?.[v]) || SHARP_SPLAT.still;
+}
 
 /** The build the site loads. */
 export const SCENE: SceneBuild = SHARP_SPLAT;

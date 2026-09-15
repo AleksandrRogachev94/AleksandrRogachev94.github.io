@@ -17,6 +17,8 @@ import { createRoomRenderer, type RoomRenderer } from "../scripts/roomRenderer";
 import { createSplatRenderer } from "../scripts/splatRenderer";
 import { choose as chooseDaylight, current as currentDaylight, type Daylight }
   from "../scripts/daylight";
+import { choose as chooseSeason, current as currentSeason, type Season }
+  from "../scripts/season";
 import {
   createCameraRig,
   pushTimeFor,
@@ -31,13 +33,14 @@ import {
 import { TRANSITION, TRANSITION_VARS } from "../scripts/transition";
 import { HOTSPOTS, hotspotById, type Hotspot } from "../data/hotspots";
 import { CONTROLS } from "../data/controls";
-import { SCENE } from "../data/scene";
+import { SCENE, stillFor, variantFor } from "../data/scene";
 import { SITE } from "../data/site";
 import type { Project } from "../data/projects";
 import { createRoomAudio, type RoomAudio } from "../scripts/roomAudio";
 import HotspotButton from "./Hotspot";
 import RoomControlButton from "./RoomControl";
 import DaylightToggle from "./DaylightToggle";
+import SeasonSwitch from "./SeasonSwitch";
 import { useLastInput } from "./useLastInput";
 import Ambient from "./Ambient";
 import MonitorFocus from "./MonitorFocus";
@@ -178,8 +181,8 @@ export default function Room() {
   const [project, setProject] = useState<string | null>(null);
   /**
    * Whether the room's ambient audio is actually playing — not whether it was asked for.
-   * `roomAudio.toggle()` resolves to what happened, because a page load is not a gesture and
-   * a browser is entitled to refuse.
+   * `roomAudio.toggle()` resolves to what happened, because a browser is entitled to refuse
+   * a file it cannot decode. It starts false on every load and only a click can change it.
    */
   const [audioOn, setAudioOn] = useState(false);
   const audioRef = useRef<RoomAudio | null>(null);
@@ -190,6 +193,16 @@ export default function Room() {
    * visibly correct itself on hydration.
    */
   const [daylight, setDaylight] = useState<Daylight | null>(null);
+  /**
+   * Which season the room is in. Null before the mount effect, same as `daylight` and for the
+   * same reason — a value chosen during render is chosen at build time, in whatever month the
+   * CI machine ran in.
+   *
+   * Held separately from `daylight` rather than as one "lighting" value, because the two are
+   * overridden independently and on completely different timescales; scripts/season.ts has
+   * the argument. They meet in exactly one place, `variantFor`, and nowhere else.
+   */
+  const [season, setSeason] = useState<Season | null>(null);
   /**
    * The veil schedule currently in force — which destination the camera is approaching, in
    * the only terms the rig cares about. A ref rather than state because `onBeforeFrame` is
@@ -296,7 +309,9 @@ export default function Room() {
     // and localStorage. Resolved at render it would bake the build machine's timezone into
     // the page.
     const initialDaylight = currentDaylight();
+    const initialSeason = currentSeason();
     setDaylight(initialDaylight);
+    setSeason(initialSeason);
 
     // Both renderers satisfy the same interface, so nothing below this line — the rig, the
     // stage manager, the hotspots — knows which build is mounted. See src/data/scene.ts.
@@ -306,12 +321,12 @@ export default function Room() {
             canvas,
             assetPrefix: SCENE.assetPrefix!,
             onBeforeFrame,
-            // The room opens in whatever lighting the visitor's own clock implies, unless
-            // they have overridden it before (scripts/daylight.ts). Decided here rather
-            // than toggled after mount so the night raster is fetched in the same batch as
-            // the other four — someone arriving at midnight never watches the day room
-            // resolve and then dissolve away.
-            variant: initialDaylight === "day" ? undefined : initialDaylight,
+            // The room opens in whatever lighting the visitor's own clock and calendar
+            // imply, unless they have overridden either before (scripts/daylight.ts,
+            // scripts/season.ts). Decided here rather than switched after mount so the
+            // right raster is fetched in the same batch as the geometry — someone arriving
+            // in October never watches the summer room resolve and then dissolve away.
+            variant: variantFor(initialSeason, initialDaylight) ?? undefined,
             // Straight onto the element as a custom property, not through React state. This
             // fires once per network chunk — dozens of times over a few seconds — and all it
             // ever does is set the width of one bar.
@@ -366,14 +381,16 @@ export default function Room() {
   // its `<audio>` on the first play, so a visitor who never touches the speaker never pays
   // for the loop.
   //
-  // A remembered preference is *armed*, not obeyed: this attempt is made without a gesture
-  // and will usually be refused, in which case the light stays off and the stored preference
-  // is left alone so the next click picks it up.
+  // **It always starts silent, and no preference is restored.** A stored "on" used to be
+  // replayed here without a gesture, on the theory that the browser would refuse it — which
+  // it does, except on the one browser profile that has already earned an autoplay grant by
+  // playing this loop before. roomAudio.ts has the rest of that argument. The practical
+  // symptom was this: `audioOn` could come up true at load, so the speaker's LED sat lit over
+  // a silent room with no way to tell that from a bug.
 
   useEffect(() => {
     const audio = createRoomAudio();
     audioRef.current = audio;
-    if (audio.remembered()) void audio.toggle().then(setAudioOn);
     return () => {
       audio.dispose();
       audioRef.current = null;
@@ -387,22 +404,44 @@ export default function Room() {
   // ---- the day/night switch ------------------------------------------------
   //
   // A room control: it changes the light in place and never touches the camera (rule 5). The
-  // renderer owns the transition — `setVariant` fetches the raster if this is the first ask
-  // and crossfades the cloud's colour, geometry untouched — so all this does is decide which
-  // one and record whether that was a disagreement with the clock worth keeping.
+  // renderer owns the transition — `setVariant` fetches whatever this variant is missing and
+  // then dips: fade down, swap colour *and* geometry at the bottom, fade back up — so all this
+  // does is decide which variant and record whether that was a disagreement with the clock
+  // worth keeping.
   //
-  // The state is set optimistically rather than waiting on the fetch. The crossfade is the
-  // feedback, and a switch that stays in its old position for as long as a 2.4MB raster takes
-  // reads as broken; if the fetch fails the renderer keeps the lighting it has and logs, which
-  // is the same shape as everything else here degrading explicitly.
-  const toggleDaylight = useCallback(() => {
-    setDaylight((was) => {
-      const next: Daylight = was === "night" ? "day" : "night";
-      chooseDaylight(next);
-      rendererRef.current?.setVariant?.(next === "day" ? null : next);
-      return next;
-    });
+  // The state is set optimistically rather than waiting on the fetch. The dip is the feedback,
+  // and a switch that stays in its old position for as long as ~11MB takes reads as broken; if
+  // the fetch fails the renderer keeps the lighting it has and logs, which is the same shape
+  // as everything else here degrading explicitly.
+  //
+  // **Both switches route through one function**, because a variant is a cell in a matrix and
+  // not a property of either axis: picking "fall" while the room is dark draws the night
+  // raster, and picking "night" in winter draws a different one than picking it in summer.
+  // Deciding that at each call site is how the two controls end up disagreeing about what is
+  // on screen.
+  const applyLighting = useCallback((s: Season, d: Daylight) => {
+    rendererRef.current?.setVariant?.(variantFor(s, d));
   }, []);
+
+  // Both read the *other* axis from state and depend on it, rather than reaching for it
+  // inside a `setState` updater. An updater has to be pure — React is entitled to run it
+  // twice — and `setVariant` starts a fetch of up to ~11MB and a dip, which is not something
+  // to hand a function that may be replayed. Two small buttons re-taking a closure on each
+  // change costs nothing.
+  const toggleDaylight = useCallback(() => {
+    if (!daylight || !season) return;
+    const next: Daylight = daylight === "night" ? "day" : "night";
+    chooseDaylight(next);
+    setDaylight(next);
+    applyLighting(season, next);
+  }, [applyLighting, daylight, season]);
+
+  const pickSeason = useCallback((next: Season) => {
+    if (!daylight) return;
+    chooseSeason(next);
+    setSeason(next);
+    applyLighting(next, daylight);
+  }, [applyLighting, daylight]);
 
   // ---- viewport size, for placing the hotspots -----------------------------
 
@@ -455,7 +494,7 @@ export default function Room() {
       // than being one curve for the whole room.
       veilRef.current = h.veil ?? DEFAULT_VEIL;
 
-      rig?.pushToImagePoint(h.aim[0], h.aim[1], h.disparity, h.travel);
+      rig?.pushToImagePoint(h.aim[0], h.aim[1], h.distanceM, h.travel);
       setFocus(h);
       setPhase("entering");
       clearTimeout(timerRef.current);
@@ -710,6 +749,9 @@ export default function Room() {
       // Drives the letterbox mat in room.css. Same state as the renderer's variant, so the
       // bands beside the art cannot disagree with the room inside them.
       data-daylight={daylight ?? undefined}
+      // Seasons move the mat too: a winter room sits in a cooler frame than a summer one,
+      // and the bands beside the art must not disagree with the room inside them.
+      data-season={season ?? undefined}
       // The timeline, handed to the stylesheet so the camera and the keyframes cannot
       // disagree about when the camera stops. `--push` is written on this same element
       // every frame by the rig; React only touches the keys it owns, so the two coexist.
@@ -726,11 +768,30 @@ export default function Room() {
       {poster && (
         <img
           className={`room__canvas room__still ${drawable ? "room__still--gone" : ""}`}
-          src={(daylight && SCENE.variantStill?.[daylight]) ?? STILL}
+          // **No `src` until the visitor's clock and calendar have been read**, and that is
+          // the whole point rather than an oversight. This island is server-rendered, so a
+          // `src` here is chosen at build time — and the browser's preload scanner finds an
+          // `<img src>` in the body long before React can correct it. Shipping the summer
+          // poster unconditionally meant every off-season visitor downloaded 425KB that was
+          // never shown, competing for bandwidth with the one that was. index.astro's inline
+          // script has already pointed the `<link rel=preload>` at the right poster by the
+          // time this mounts, so setting the src here is a cache hit rather than a fetch.
+          src={season && daylight ? stillFor(season, daylight) : undefined}
           alt=""
           aria-hidden="true"
           fetchPriority="high"
         />
+      )}
+
+      {/* The no-JS room. With scripting off this island never hydrates, so the img above
+          never gets a src — and the poster *is* the room in that case (rule 2). This carries
+          it, and costs scripted visitors nothing: a browser with scripting enabled does not
+          parse `<noscript>` contents as markup, so nothing in here is ever fetched. Summer
+          day, because a static page cannot know better and that is the base build. */}
+      {poster && !(season && daylight) && (
+        <noscript>
+          <img className="room__canvas room__still" src={STILL} alt="" />
+        </noscript>
       )}
 
       {/* Wordless, and gone the moment it is not needed. The room's own language is warm
@@ -812,7 +873,12 @@ export default function Room() {
           on an object. The floor lamp is where this belongs; docs are in DaylightToggle.tsx.
           Same `inert` gate as the other control layer — unreachable behind an open panel. */}
       <div className="daylight-layer" inert={busy || undefined}>
-        <DaylightToggle daylight={daylight} onToggle={toggleDaylight} />
+        {/* One row, season first: it names what you are looking at, where the day/night pill
+            names where a click goes, so the pair reads left-to-right as state then action. */}
+        <div className="room-controls">
+          <SeasonSwitch season={season} onChoose={pickSeason} />
+          <DaylightToggle daylight={daylight} onToggle={toggleDaylight} />
+        </div>
       </div>
 
       {focus &&

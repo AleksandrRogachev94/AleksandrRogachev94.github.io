@@ -115,7 +115,7 @@ export interface CameraRig {
   /** Start pushing toward a point in the room. Safe to call mid-move. */
   pushTo(target: PushTarget): void;
   /** Push toward a point on the art at a known depth. Disparity is 1 near, 0 far. */
-  pushToImagePoint(nx: number, ny: number, disparity: number, travel?: number): void;
+  pushToImagePoint(nx: number, ny: number, distanceM: number, travel?: number): void;
   /** Come home. Safe to call mid-push. */
   release(): void;
   /** Eased progress, 0 at home and 1 fully pushed in. Drives the UI cross-fade. */
@@ -314,9 +314,9 @@ export function createCameraRig(
     tuning,
     update,
     pushTo(next) { target = next; pushing = true; },
-    pushToImagePoint(nx, ny, disparity, travel) {
+    pushToImagePoint(nx, ny, distanceM, travel) {
       target = {
-        point: imagePointToWorld(nx, ny, disparity, { ...tuning, imageAspect }),
+        point: imagePointToWorld(nx, ny, distanceM, { ...tuning, imageAspect }),
         travel,
       };
       pushing = true;

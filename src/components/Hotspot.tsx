@@ -50,7 +50,6 @@
 
 import { useRef, type CSSProperties } from 'react';
 import type { Hotspot } from '../data/hotspots';
-import { SCENE } from '../data/scene';
 import { pinToArt, type ScreenRect } from '../scripts/roomGeometry';
 import ObjectLight from './ObjectLight';
 
@@ -75,7 +74,7 @@ export default function HotspotButton({ hotspot, box, view, aspect, onActivate }
   // The room parallaxes under this layer, so the rect has to follow it. `pinToArt` is the
   // shared placement — including the reason it is `left`/`top` and never a transform.
   const style = {
-    ...pinToArt(box, hotspot.disparity, SCENE),
+    ...pinToArt(box, hotspot.distanceM),
     '--accent': hotspot.accent,
   } as CSSProperties;
 

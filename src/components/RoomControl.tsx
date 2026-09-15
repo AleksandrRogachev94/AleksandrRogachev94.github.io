@@ -35,7 +35,6 @@
 
 import type { CSSProperties } from 'react';
 import type { RoomControl } from '../data/controls';
-import { SCENE } from '../data/scene';
 import { imageRectToScreen, pinToArt, type ScreenRect } from '../scripts/roomGeometry';
 import ObjectLight from './ObjectLight';
 
@@ -53,7 +52,7 @@ interface Props {
 export default function RoomControlButton({ control, box, view, aspect, on, onToggle }: Props) {
   // Glued to the art exactly the way a hotspot is — same placement, same reasons.
   const style = {
-    ...pinToArt(box, control.disparity, SCENE),
+    ...pinToArt(box, control.distanceM),
     '--accent': control.accent,
   } as CSSProperties;
 

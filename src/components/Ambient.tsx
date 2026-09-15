@@ -26,7 +26,6 @@
 
 import type { CSSProperties } from 'react';
 import { AMBIENT, type AmbientEffect } from '../data/ambient';
-import { SCENE } from '../data/scene';
 import { imageRectToScreen, pinToArt } from '../scripts/roomGeometry';
 
 interface Props {
@@ -39,7 +38,7 @@ interface Props {
 function Effect({ effect, view, aspect }: { effect: AmbientEffect } & Props) {
   const box = imageRectToScreen(effect.rect, view.w, view.h, aspect);
   const style = {
-    ...pinToArt(box, effect.disparity, SCENE),
+    ...pinToArt(box, effect.distanceM),
     ...(effect.accent ? { '--accent': effect.accent } : {}),
   } as CSSProperties;
 

@@ -94,12 +94,37 @@ renderer.**
 ```bash
 tools/.venv/bin/python tools/sharp_splat_bake.py \
     --ply art/room-day-summer.ply --out-prefix art/build/room-day-summer \
-    --variant night=art/room-night-summer.ply
-cp art/build/room-day-summer-splat*.{webp,bin,json} public/art/
+    --variant night=art/room-night-summer.ply \
+    --variant fall=art/room-day-fall.ply \
+    --variant winter=art/room-day-winter.ply \
+    --variant winter-night=art/room-night-winter.ply \
+    --variant fall-night=art/room-night-fall.ply
+cp art/build/room-day-summer-splat-color*.webp \
+   art/build/room-day-summer-splat*.bin \
+   art/build/room-day-summer-splat.json public/art/
+
+# the flat posters (no-WebGL2, prefers-reduced-motion, and the frame shown while the
+# cloud downloads). One per master, and re-run for any master you regenerated.
+for m in room-day-summer room-night-summer room-day-fall room-night-fall \
+         room-day-winter room-night-winter; do
+  tools/.venv/bin/python tools/export.py --prefix art/build/room-day-summer \
+      --out-dir public/art --poster-only --master "art/$m.jpg"
+done
 # then check /dev/splat: it verifies the rasters reached the GPU byte-for-byte
 ```
 
-**Both PLYs are required build inputs**, and neither is committed (`art/*.ply` is
+**Both of those lines are narrow on purpose, and `art/build/` is why.** It is disposable but
+it is never *emptied*, so it keeps outputs from encodings and from builds this one no longer
+uses — and anything that globs it promotes them into `public/art/`, where they are megabytes
+that nothing fetches and `git add` commits. It happened twice before the commands above were
+tightened: `-geom/-shape/-quat.webp` from before the geometry tables moved to `.bin` (7.6 MB),
+and the LAYERED `-layer*.webp` plates (2.6 MB), which `export.py` re-wrote on **every** run
+because it finds plates by globbing rather than by being asked for them. `--poster-only` is
+the fix for the second; the bake's own outputs are exactly `-splat-color*.webp`, `-splat*.bin`
+and `-splat.json`, which is what the `cp` names. If in doubt, `rm -rf art/build` first and let
+one clean run define the set.
+
+**All six PLYs are required build inputs**, and none is committed (`art/*.ply` is
 gitignored — see [art/README.md](../../art/README.md)). The bake cannot run from a fresh
 clone; the rasters it writes are what ships. Keep both copies outside git.
 
@@ -108,38 +133,166 @@ round-trip, and asserts the two invariants that keep an image decoder from eatin
 geometry (see below). `--no-despeckle` disables the one clean-up stage for A/B.
 
 **Do not drop the `--variant` flags.** They are not optional extras: `variants` in
-`src/data/scene.ts` names every colour raster the site expects to be able to fetch, and a
-bake run without them writes a manifest with a new `version` and no night raster, so the
-lamp switches to a 404. Every variant is re-baked from the same PLY every time.
+`src/data/scene.ts` names every raster set the site expects to be able to fetch, and a bake
+run without them writes a manifest with a new `version` and no night tables at all, so the
+lamp switches to a 404. Every variant is re-baked from the same day PLY every time, because
+they share its quantisation range — see "One number line for every cloud".
 
-## Variants: one geometry, N colour rasters
+## Variants: one lattice, N reconstructions
 
-`night` is a **second SHARP reconstruction** of the same room under different light. Only
-its `f_dc` is taken. Position, size, rotation and opacity all stay the day build's, so the
-variant costs one extra `-splat-color-<name>.webp` (~2.4 MB) rather than a second 12 MB
-bake, every authored number — the aim points in `hotspots.ts`, the disparities in
-`ambient.ts`, `excursion` in `scene.ts` — stays valid across all variants, and a day→night
-crossfade dissolves between two colours instead of swimming between two clouds.
+There are five: `night`, `fall`, `winter`, `winter-night` and `fall-night`. Which one a
+visitor sees is a (season, time-of-day) lookup — `variantFor` in `src/data/scene.ts`, the only
+place the matrix exists. Summer day is the base raster and costs no fetch, so the 3x2 matrix is
+now fully covered with no cell borrowing another's picture.
 
-That is sound because SHARP's grid is 768×768 hardcoded and predicted from a single
+**`fall-night` used to be that borrow, and per-variant geometry is what ended it.** The argument
+for reusing `night` was that nothing distinguishing fall from summer outdoors survives deep
+shadow, which is a defensible claim about *colour*. It stopped being defensible once a variant
+carried shape: the fallback handed a fall visitor summer's leafy crown, not merely summer's
+palette. A colour compromise is a judgement call; a geometry compromise is a wrong room.
+
+Each is a **second SHARP reconstruction** of the same room under different light, and each
+ships its own colour *and* its own geometry — four tables, ~11 MB a season. The bake is
+therefore six reconstructions and writes ~67 MB, but **a visitor still downloads exactly one
+cloud**: geometry is fetched on switch, so the count is deploy size, not load time.
+
+It was colour only for most of this build's life: `f_dc` crossed over and position, size,
+rotation and opacity stayed the day build's, so a variant cost one 2.4 MB raster instead of a
+second bake, every authored number stayed valid across all of them, and a day→night change
+dissolved between two colours rather than swimming between two clouds. That is a good trade
+and it is why the colour-only path still exists — a name in `variants` but not in
+`variantGeom` takes it. What it assumes is that **a variant master may relight any surface
+but may not move one**, and winter broke that. Its yard is bare branches against distant snow
+where summer's is a leafy canopy near the glass: not the same surface recoloured, a different
+surface at a different distance. Colours fitted for one landed on the other and the window
+came back with smeared branches, string-light bulbs turned to soft blobs, and a ghost streak
+across the panes.
+
+Measured at the home camera against each variant's own master (MAE/255):
+
+| | bulb strip | window band | feeder | interior |
+| --- | --- | --- | --- | --- |
+| winter-night on the day cloud | 5.86 | 6.17 | 8.22 | 3.46 |
+| winter-night on its own | **4.86** | **5.58** | **6.27** | 3.64 |
+
+Note the interior column going the *wrong* way. The day build is fitted to this exact room
+and the room does not change between masters — only the yard does, which is the whole shape
+of the problem.
+
+**All four tables travel together or none do.** The tempting middle — take the variant's
+`scale` so a bulb gets its own small Gaussian back, keep the day's centres so nothing moves —
+is much worse than either whole; the do-not-reopen list has the numbers. `f_dc` is a blend
+coefficient fitted so *overlapping* Gaussians sum to the master, so position, scale, rotation
+and colour are one joint solution, and half of one plus half of another satisfies neither.
+
+That is all sound because SHARP's grid is 768×768 hardcoded and predicted from a single
 camera, so **cell `i` is the same ray in both files**. `check_variant_ply()` asserts the
 framing that guarantees it — focal length, principal point, master size, splat count — and
-fails the bake rather than scattering one room's colours across another's splats.
+fails the bake rather than scattering one room's colours across another's splats. Under the
+colour-only path a mismatch was a wrong colour; now it would be 1.2M splats flying to the
+wrong places, so the assertion matters more, not less.
 
-The two fits are independent, so geometry drifts a little: on this scene the median splat
-is within 0.9% in depth and 2% in size, with a real tail (p99 depth 56%, p10 scale 0.66).
-`f_dc` is a blend coefficient rather than a surface colour, so a coefficient fitted for a
-slightly different Gaussian is slightly wrong on this one. The bake prints that drift every
-run. **The check that it does not matter is rendering the result at the home camera against
-the variant's own master**, where this build scores 6.01/255 — better than the day build
-manages against the day master (7.94). If a future variant's drift ever does matter, that
-number is where it will show, and the escalation is to ship the variant's geometry too
-(+10 MB, and `nearZ`/`farZ`/`fovDeg` re-copied from its manifest).
+### One number line for every cloud
 
-**Do not drop the `--variant` flags.** They are not optional extras: `variants` in
-`src/data/scene.ts` names every colour raster the site expects to be able to fetch, and a
-bake run without them writes a manifest with a new `version` and no night raster, so the
-day/night control switches to a 404. Every variant is re-baked from the day PLY every time.
+Every reconstruction in a bake is quantised against the **same** disparity and log-scale
+range (`encode()` in `tools/sharp_splat_bake.py`), spanning all of them rather than each file
+normalising to its own min and max.
+
+`nearZ`/`farZ` stop being an accident of whichever master was the `--ply`. They were
+per-file, and re-locking the masters moved `farZ` 98 m → 14 m — nothing in the room moved,
+the deepest thing in it did — which silently changed what every stored depth in `src/data`
+meant. The feeder, mapped at 8.3 m, began decoding as 5.7 m and the camera stopped short of
+it in mid-air. Those are **metres** now (`imagePointToWorld` in `src/scripts/roomGeometry.ts`)
+and the range is shared, so a re-bake is free to move the planes.
+
+The union costs almost nothing, because disparity is quantised linearly in 1/z and stretching
+the far end is nearly free at the near end where the parallax is. Over these five
+reconstructions it takes `farZ` from 13.9 m to **111 m** — winter's bare branches let distant
+sky through where summer's canopy stops at the fence — and the p99 depth error inside 3 m
+goes 0.110 mm → 0.121 mm.
+
+### Changing the lighting: a dip, not a dissolve and not a morph
+
+Both of the other two were built and neither survived contact with the seasons.
+
+A **colour dissolve** was right while a variant was `f_dc` alone on one shared cloud: nothing
+moved between variants, so crossfading two colour rasters read exactly as the light changing.
+It stopped being available the moment each season brought its own geometry — there are two
+different rooms to get between now, not two lightings of one.
+
+A **morph** was the obvious replacement and the maths is clean. Correspondence is exact (cell
+`i` is the same ray in every reconstruction), so it is a plain lerp with nothing to match:
+disparity, the offset in master pixels, the scale byte in log space, nlerp on the rotation,
+each interpolated in the space the bake stored it in. It looked bad. Two independent fits
+disagree about a surface in ways that are individually tiny and collectively **incoherent**,
+so the midpoint is not a room halfway between two rooms — it is 1.2M splats each taking its
+own short wrong path, and the eye reads the whole window as boiling. That is not fixable by
+easing it differently: the interpolant is wrong, not its schedule. A lerp assumes the
+in-between states mean something, and between two independent least-squares solutions they do
+not.
+
+So: **fade the room down, swap everything at the bottom, fade it back up.** The swap is
+invisible because there is nothing on screen to see it happen to, it costs one uniform and no
+second set of texture units, and it cannot boil.
+
+**Two sign errors lived in that one sentence, and both looked like a broken feature rather
+than a mis-tuned one.** They are worth naming because neither is visible in the code without
+evaluating it at the endpoints.
+
+The first was the ramp's *polarity*. `uDim` was driven by a triangle that read 0 at both ends
+and 1 in the middle — the dip upside down. What that plays is: black on the first frame, the
+**old** room fading up to full, a hard cut to the new season at full brightness, a fade down
+to black, and a snap back. Two visible steps with the swap sitting in the open between them,
+which is the one thing the dip exists to hide. Assert the endpoints by eye: the multiplier
+must be **1 when `dip` is 0 or 1, and 0 at 0.5**.
+
+The second was the bottom's *colour*. The clear colour lerped between the two rooms' own
+backgrounds on the theory that dipping through them was gentler than dipping through nothing.
+It is not gentler. Dimming a splat makes it **translucent before it makes it invisible**, so
+a bright clear colour arrives through every surface in the room at once and the objects appear
+to light up from inside on the way down — and the base cloud has no measured background entry,
+so it falls back to `--room-bg` at 0.95 while every variant sits at 0.10–0.33. Every
+transition touching summer day bottomed out on a bright field. `setClear` now takes the same
+eased curve as `uDim`, so the room and the ground behind it reach black together.
+
+It also deleted more than it added: no `uColorB`, no `uMix`, no B-slot samplers. The shader
+reads four textures, which is fewer than it did before any of this started.
+
+The **draw order** is per-cloud, and it swaps at the bottom with everything else. Order is a
+discrete permutation and could not have been interpolated anyway. The existing "sort once,
+never again" argument is about the *rig* — it only translates, so every splat's view depth
+shifts by the same amount and nothing reorders — and it says nothing about swapping the cloud
+underneath it. Two fits disagree about what is behind what.
+
+At most **three clouds stay resident** (`LIVE_CLOUDS`). One would refetch on every change;
+two would cover a season switch but not the day/night toggle *inside* a season, which is the
+most-used control in the room. Three covers every two-step path through the six states.
+
+### How far the yards actually diverge
+
+The drift the bake prints is a whole-frame median and it hides where the trouble is. Split it
+by region — layer A, relative depth against the day build, 2026-09-13:
+
+| variant | interior (p90) | window band (p90) | the string-light strip (p90) |
+| --- | --- | --- | --- |
+| `fall` | 0.014 | 0.113 | 0.189 |
+| `night` | 0.046 | 0.153 | 0.252 |
+| `winter` | 0.008 | 0.389 | **0.654** |
+| `winter-night` | 0.046 | 0.439 | 0.464 |
+
+**The room is free and the yard is not.** Every master is the same room from the same camera,
+so interior geometry agrees to within 1–5%; nothing indoors has ever caused a variant artifact.
+The window is where a season is expressed and it is the only part of the frame that genuinely
+moves. That is the measurement that ended the colour-only path for seasons — and it is also
+why `fall` and `night`, at 0.113 and 0.153, would have been survivable on it. They ship their
+own geometry anyway, because a rule with an exception list is a rule someone has to re-derive.
+
+The one artifact this does **not** fix is the **feeder's glow ring**. It is ~160 master px at
+8.3 m seen through glazing bars — about 11 grid cells across, the reconstruction's resolution
+floor — and at night it is a bright luminous annulus where the day master has a dark recess.
+Its own geometry still scores 6.27, the worst region in the frame, and the ring still renders
+as a broken C. Softening the halo in the night masters is the lever; the ring inside the
+feeder mouth is the subject and should stay. Resolution, not registration.
 
 ## What gets written
 
@@ -373,6 +526,36 @@ defect, so each fix revealed the next one.
   and it showed the fence as clean). **If the artifact only appears when the camera moves,
   nothing measured on a still raster can find it.**
 
+- **Transferring *part* of a variant's geometry along with its colour.** When winter's blur
+  was diagnosed, the cheap repair looked obvious: take the variant's `scale` too, so a bulb
+  gets its own small Gaussian back while position — and therefore every authored number —
+  stays the day build's. Measured on winter-night at the home camera, MAE/255 against its own
+  master:
+
+  | transferred with `f_dc` | bulbs strip | window/yard | feeder | interior |
+  | --- | --- | --- | --- | --- |
+  | nothing (what ships) | 5.86 | 6.17 | 8.22 | 3.46 |
+  | `scale` | 8.16 | 8.83 | **41.50** | 3.47 |
+  | `scale` + `quat` | 7.74 | 8.59 | 38.61 | 3.47 |
+  | `xyz` | 8.43 | 8.19 | 9.99 | 3.42 |
+  | `alpha` | 5.85 | 6.11 | 8.05 | 3.46 |
+  | everything (own geometry) | **4.86** | **5.58** | **6.27** | 3.64 |
+
+  **Every partial transfer is worse than either whole.** `f_dc` is a blend coefficient, not a
+  surface colour — it is fitted so the *overlapping* Gaussians sum to the master — so position,
+  scale, rotation and colour are one joint solution to one least-squares problem, and half of
+  one solution plus half of another satisfies neither. Lending a variant its own splat sizes on
+  the day build's centres puts five times the error on the feeder than leaving it alone. So the
+  choice is binary: colour only, or a second full cloud — which is what the build now ships.
+  There is no dial between them, and `alpha` is not a loophole: it is within noise, which is
+  the same result.
+
+  It is also why a **delta encoding** of a variant's tables against the day build's does not
+  pay. The interior barely moves, so most of the difference is ~zero and deflate should eat
+  it — measured, 8.14–8.74 MB against 8.49–8.93 raw, a few percent. Two independent fits
+  disagree in the low bits *everywhere*, so the delta is small in magnitude and high in
+  entropy, which is the one thing deflate cannot help with.
+
 - **Believing a crop of the splat grid without converting the coordinates.** The grid is
   768×768 over a 16:9 master, so rows compress: `master_y = grid_y / 768 × 3072`. A box
   picked by eye off the master and applied to the grid measures the wrong band — it is how a
@@ -477,10 +660,17 @@ its number as the shipped one overstates the room by about half.
 
 ## Open
 
-### 1. Payload — 8.89 MB
+### 1. Payload — 11.16 MB for a first load
 
-geom 2.75 + quat 2.66 + shape 2.27 + colour 1.22, against the layered build's 3.10 MB.
-The one thing about this build that is worse. Routes, in order:
+geom 2.73 + quat 3.06 + shape 2.89 + colour 2.49, against the layered build's 3.10 MB. The
+one thing about this build that is worse.
+
+**A visitor arriving in a variant pays more, and only a little more.** Winter night is
+13.49 MB: its own four tables plus the base colour raster, which is fetched at open because
+it is what "back to day" fades to and skipping it would make the first toggle the slow one.
+Its 8.5 MB of *geometry* is not prefetched — see the note at `openGeom` in
+`src/scripts/splatRenderer.ts`, which is the whole reason six reconstructions on disk do not
+cost a visitor six. Routes, in order:
 
 1. Convert to **SOG** (`playcanvas/sogs`, 15–20× on raw PLY → ~3–4 MB) and read it with
    Spark. The reference implementation needs CUDA (`torchpq`, `cupy`, PLAS) so it will not
@@ -490,7 +680,7 @@ The one thing about this build that is worse. Routes, in order:
 ~~Note the four files carry stable names and no content hash…~~ **Done.** The bake writes a
 `version` (a content hash of the four rasters) into the manifest and both the renderer and
 `/dev/splat` append it as `?v=`; the manifest itself is fetched with `cache: 'no-cache'`,
-which is ~500 bytes against the 8.9 MB it points at. The harness also moved to `/dev/splat`
+which is ~500 bytes against the 11 MB it points at. The harness also moved to `/dev/splat`
 so it is served from the site's own origin — it used to be opened through a separate static
 server, which is a separate HTTP cache, which is how the two could disagree about which
 bake they were showing.

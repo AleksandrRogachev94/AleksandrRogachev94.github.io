@@ -45,6 +45,7 @@
  */
 
 import { lookAt, mat4, multiply, perspective, type Mat4, type Vec3 } from './mat4';
+import { fitZoom } from './roomGeometry';
 
 /** One layer's plates. Colour carries alpha; layer 0's is opaque and may be RGB. */
 export interface RoomLayerSource {
@@ -503,13 +504,15 @@ export async function createRoomRenderer(opts: RoomRendererOptions): Promise<Roo
     resize();
     const canvasAspect = canvas.width / canvas.height;
     // Reconstruction is fixed to the art's own frame; the canvas showing a different aspect
-    // has to be width-locked to it, not true `object-fit: cover` — see the header of
-    // roomGeometry.ts, whose `fit()` this must keep agreeing with pixel-for-pixel, since
-    // that is what places the hotspot buttons over this same render. Solving for the
-    // vertical fov that keeps the *horizontal* fov pinned to the art's own width, at any
-    // canvas aspect, crops top/bottom on a canvas wider than the art and letterboxes
-    // top/bottom on one narrower (a phone in portrait) — one formula, both cases.
-    const fovYProj = 2 * Math.atan((Math.tan(fovY / 2) * imageAspect) / canvasAspect);
+    // has to be fitted to it — see the header of roomGeometry.ts, whose `fit()` this must
+    // keep agreeing with pixel-for-pixel, since that is what places the hotspot buttons over
+    // this same render. Solving for the vertical fov that pins the *horizontal* fov to the
+    // art's own width crops top/bottom on a canvas wider than the art and letterboxes
+    // top/bottom on one narrower; dividing that horizontal half-angle by `fitZoom` is the
+    // zoom, which narrows the horizontal fov so the art is drawn wider than the canvas and
+    // fills the height instead. One formula, all three cases.
+    const zoom = fitZoom(canvas.width, canvas.height, imageAspect);
+    const fovYProj = 2 * Math.atan((Math.tan(fovY / 2) * (imageAspect / zoom)) / canvasAspect);
     perspective(proj, fovYProj, canvasAspect, 0.05, farZ * 4);
     lookAt(view, camera.eye, camera.center, UP);
     multiply(viewProj, proj, view);

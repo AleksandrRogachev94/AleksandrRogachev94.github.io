@@ -22,11 +22,13 @@ There are now **three scene builds**. The *authored* one is everything above. Th
 that **ships** draws an Apple SHARP Gaussian reconstruction directly — no plates, no
 masks, no inpainting, five files and two commands. Its runbook is
 [docs/SCENE-SPLAT.md](docs/SCENE-SPLAT.md). **Every lighting variant is its own
-reconstruction**, sharing the day build's geometry and contributing only `f_dc`: night is
-`art/room-night-summer.ply`, not an image. Inferring a variant's colours from a photograph
-of it was built and removed — a photograph does not record what is behind a leaf, so hidden
-splats get lit through whatever covers them and lateral motion pulls a sunlit fence out
-from behind every glazing bar. The third
+reconstruction** — colour *and* geometry: night is `art/room-night-summer.ply`, not an image.
+Variants used to contribute only `f_dc` and borrow the day build's cloud, which is cheaper and
+still supported; winter ended it for seasons, because a variant master may relight any surface
+but may not *move* one, and winter's yard is bare branches where summer's is leafy canopy.
+Inferring a variant's colours from a photograph of it was built and removed — a photograph
+does not record what is behind a leaf, so hidden splats get lit through whatever covers them
+and lateral motion pulls a sunlit fence out from behind every glazing bar. The third
 ([docs/SCENE-SHARP.md](docs/SCENE-SHARP.md)) flattened the same reconstruction into plates
 and a torn mesh; it is superseded and its doc says why.
 
@@ -96,9 +98,9 @@ engineering. Do not blend the two palettes.
 
 **5. Two interaction grammars, kept separate.** A _hotspot_ pushes the camera in and goes
 live. A _room control_ changes something in place and never moves the camera — currently
-the record player (ambient audio, off by default, remembered in `localStorage`) and the
-day/night override. Never make one object both. The guitar is a future destination, not
-the audio toggle.
+the record player (ambient audio, off on every load — never restored from storage), the
+day/night override and the season switch. Never make one object both. The guitar is a
+future destination, not the audio toggle.
 
 **6. Adding things should not touch the room art.** A new software project is an entry in
 `src/data/projects.ts` plus a page. A new physical object is an entry in
@@ -266,9 +268,13 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   regenerate from there, never from memory.
 - **The day image locks geometry.** Hotspot rectangles and the depth map derive from it,
   and every other variant (night, seasons) is an _edit_ of a locked image so registration
-  holds. Anything that glows at night must already exist, unlit, in the day image.
+  holds. Anything that glows at night must already exist, unlit, in the day image. What
+  "registration" now requires under the splat build is only that every master share the day's
+  **framing** — same camera, same intrinsics, same size — because cell `i` of the 768x768
+  grid has to be the same ray in every reconstruction. What is *behind* the glass may move;
+  it brings its own geometry.
 - **Art is split by authorship, not by kind.** `art/` holds only what a hand or a
-  generator produced and no script can recreate: the master, `objects.json`,
+  generator produced and no script can recreate: the six masters, `objects.json`,
   `masks-manual/`, `fills/` — committed, never served. `art/build/` holds everything the
   tools derive from those (depth, layer masks, inpainted plates, review previews) and is
   **gitignored and disposable**; `rm -rf art/build` is always safe and costs one re-run.

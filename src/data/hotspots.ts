@@ -55,7 +55,13 @@ export interface Hotspot {
    * middle of the glass. */
   aim: readonly [number, number];
   /**
-   * How far away that aim point is, in the depth map's own units — 1 nearest, 0 farthest.
+   * How far away that aim point is, **in metres**.
+   *
+   * It was the bake's normalised disparity until re-locking the masters moved `farZ` from
+   * 98m to 14m and every one of these silently came to mean somewhere else — the feeder,
+   * authored at 8.3m, decoded as 5.7m and the camera stopped short of it in mid-air. A
+   * distance is a fact about the room; a disparity is a fact about the quantisation range.
+   * See `imagePointToWorld`.
    *
    * Authored rather than sampled at runtime. Reading it live would mean shipping the
    * whole-frame depth plate (424KB the site otherwise never needs) and a `getImageData`
@@ -63,7 +69,7 @@ export interface Hotspot {
    * a bad reading be overruled: the value under the bird feeder is contaminated by the fig
    * leaf crossing in front of it, so the window aims at the window plane instead.
    */
-  disparity: number;
+  distanceM: number;
   /**
    * Fraction of the way to the aim point the push travels. Never 1 — the reconstruction
    * runs out of resolution before the camera runs out of distance, and the arrival is
@@ -153,8 +159,8 @@ export const HOTSPOTS: readonly Hotspot[] = [
     // the frame at 4m - against the yard's 0.116 at 8.3m. A column scan found x=0.280
     // straddling at every height with 0.265 and 0.290 clean. Aim between the bars.
     aim: [0.265, 0.385],
-    // 8.31m, measured with tools/splat_probe.py.
-    disparity: 0.116,
+    // 8.29m, measured with tools/splat_probe.py at the aim point above.
+    distanceM: 8.29,
     // Deliberately short, and NOT set by frame fill like the monitor below. The feeder is
     // 0.059 of frame width, so filling the frame would need travel 0.95 - and 0.95 of
     // 8.31m is a 7.9m translation that flies the camera through the glass and leaves the
@@ -188,7 +194,7 @@ export const HOTSPOTS: readonly Hotspot[] = [
     aim: [0.5, 0.835],
     // 3.18m, and clean - p25 0.316 / p75 0.318 - because the rover sits in open floor
     // with nothing crossing in front of it.
-    disparity: 0.317,
+    distanceM: 3.24,
     // 0.75 of frame width. Filling it outright needs travel 0.89, which magnifies 9.1x
     // and puts one splat at ~19 screen px against the 9px veil room.css fades in: at
     // 0.105 of frame width the rover runs out of reconstruction before it runs out of
@@ -230,7 +236,7 @@ export const HOTSPOTS: readonly Hotspot[] = [
     aim: [0.723, 0.457],
     // 4.51m. Spread across the sample window is 0.001 - a flat frontal panel is the
     // easiest thing in the room to get a depth reading on.
-    disparity: 0.221,
+    distanceM: 4.67,
     // **Set by frame fill, and the fill is now ~1.0 rather than the 0.76 it was.** At
     // 0.158 of frame width the screen reaches 0.98 of the frame at travel 0.84, which is
     // the point of diminishing return in both directions: past it the bezels leave frame

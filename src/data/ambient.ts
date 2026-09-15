@@ -61,14 +61,14 @@ export interface AmbientEffect {
    */
   rect: NormRect;
   /**
-   * How far away that patch is, in the depth map's own units (1 nearest, 0 farthest).
+   * How far away that patch is, **in metres** — see the note on `Hotspot.distanceM`.
    *
    * Measured with `tools/splat_probe.py`, never guessed — this is what glues the overlay
    * to the art while the room parallaxes under it. An overlay pinned to the screen at the
    * room's current ambient amplitude slips by ~41px at mid-room depth, which on a patch
    * this size is the whole effect sliding off the surface it belongs to.
    */
-  disparity: number;
+  distanceM: number;
   /**
    * The light's own colour, for the electronic tells. Defaults to warm white.
    *
@@ -140,7 +140,7 @@ export const AMBIENT: readonly AmbientEffect[] = [
     rect: [0.828, 0.450, 0.868, 0.570],
     // 3.81m. tools/splat_probe.py reports median 0.263 at the rim and 0.262 a third of the
     // way up the column, so the whole plume sits at one depth and needs only one number.
-    disparity: 0.263,
+    distanceM: 3.92,
   },
   {
     id: 'feeder-lens',
@@ -158,11 +158,25 @@ export const AMBIENT: readonly AmbientEffect[] = [
      * PLAN.md already wanted this for the night variant, where the window would otherwise go
      * black and read as dead. Building it for day means night is a tuning change rather than
      * a new effect.
+     *
+     * **At night this is now the only ring there is — deleting it puts the feeder out.** The
+     * night masters used to paint a glowing ring here and this bloom sat on top of it. They
+     * no longer do, because the feeder is ~11 splats across at 8.29m and a glow in mid-air
+     * has no surface for SHARP to attach it to, so the painted ring reconstructed as a broken
+     * C that smeared across the glass, the feeder and the fence under lateral motion. The
+     * masters keep what a reconstruction *can* hold — a dark lens and a warm pool lying flat
+     * on the seed tray — and the ring moved here, where it is not geometry, cannot smear, and
+     * gets to blink. docs/PROMPTS.md section B carries the full argument.
+     *
+     * That makes `room.css`'s `led-record` baseline load-bearing rather than decorative: it
+     * rests at 0.10 between pulses, a floor chosen when paint was carrying the ring and this
+     * only had to modulate it. If the feeder reads dead between pulses at night, that floor
+     * is the dial — not the accent and not the rect.
      */
     rect: [0.2785, 0.3734, 0.2870, 0.3992],
-    // The feeder's own hotspot disparity: 8.31m. The window plane reading is contaminated by
+    // The feeder's own hotspot distance. The window plane reading is contaminated by
     // the fig leaf crossing in front, which is why that number is authored there too.
-    disparity: 0.116,
+    distanceM: 8.29,
     accent: 'var(--accent-birdlense)',
   },
   {
@@ -185,7 +199,7 @@ export const AMBIENT: readonly AmbientEffect[] = [
      */
     rect: [0.5026, 0.8592, 0.5220, 0.8749],
     // 3.18m, and clean — the rover sits in open floor with nothing crossing in front of it.
-    disparity: 0.317,
+    distanceM: 3.24,
     accent: 'var(--accent-robotrail)',
   },
   {
@@ -211,7 +225,7 @@ export const AMBIENT: readonly AmbientEffect[] = [
      */
     rect: [0.6434, 0.3981, 0.8011, 0.5254],
     // 4.51m. A flat frontal panel is the easiest thing in the room to get a depth reading on.
-    disparity: 0.221,
+    distanceM: 4.67,
     accent: 'var(--accent-flowlab)',
   },
 ];

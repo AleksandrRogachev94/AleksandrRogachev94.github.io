@@ -20,7 +20,11 @@
 
 export type Daylight = 'day' | 'night';
 
-const KEY = 'room-daylight';
+/** Exported because index.astro's inline preload script has to infer the same boundary
+ *  before the island exists, and two copies of "19" would drift. */
+export const KEY = 'room-daylight';
+export const NIGHT_FROM = 19;
+export const NIGHT_UNTIL = 7;
 
 /**
  * Night runs 19:00–07:00 by the visitor's own clock.
@@ -33,7 +37,7 @@ const KEY = 'room-daylight';
  */
 export function inferred(now: Date = new Date()): Daylight {
   const h = now.getHours();
-  return h >= 19 || h < 7 ? 'night' : 'day';
+  return h >= NIGHT_FROM || h < NIGHT_UNTIL ? 'night' : 'day';
 }
 
 /** The visitor's explicit choice, or null if they have not made one. */

@@ -131,9 +131,13 @@ import '../../styles/tokens.css';
         status.textContent = 'no webgl2 — the site would show the static image here';
       } else {
         // No depth plate under the splat build. Click-to-push still works; it just aims
-        // at a fixed mid-room disparity instead of the one under the cursor, which is a
+        // at a fixed mid-room depth instead of the one under the cursor, which is a
         // harness convenience rather than anything the site relies on.
         const sampleDepth = DEPTH ? await depthSampler(DEPTH) : () => 0.35;
+        // The plate speaks normalised disparity; hotspots.ts and the rig speak metres.
+        // tools/splat_probe.py is what maps a point to metres under the splat build.
+        const metresAt = (nx: number, ny: number) =>
+          1 / (1 / SCENE.farZ + (1 / SCENE.nearZ - 1 / SCENE.farZ) * sampleDepth(nx, ny));
         const tuning = { ...ROOM_TUNING };
         rig = createCameraRig(renderer, renderer.imageAspect, tuning);
 
@@ -155,9 +159,9 @@ import '../../styles/tokens.css';
           const [nx, ny] = pointOnArt(e.clientX, e.clientY);
           // Report what a hotspot entry would need to reproduce this push, so mapping an
           // aim point is a matter of clicking the thing and reading the console.
-          const disparity = sampleDepth(nx, ny);
-          console.log(`aim: [${nx.toFixed(3)}, ${ny.toFixed(3)}]  depth: ${disparity.toFixed(3)}`);
-          rig!.pushToImagePoint(nx, ny, disparity);
+          const distanceM = metresAt(nx, ny);
+          console.log(`aim: [${nx.toFixed(3)}, ${ny.toFixed(3)}]  distanceM: ${distanceM.toFixed(2)}`);
+          rig!.pushToImagePoint(nx, ny, distanceM);
           pushing = true;
         });
 

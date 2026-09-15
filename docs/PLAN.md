@@ -360,8 +360,8 @@ camera never moves.**
 **Ambient audio — built.** The speaker on the shelf (`src/data/controls.ts`,
 `src/scripts/roomAudio.ts`). Chill music, **off by default** — browsers block autoplaying
 audio without a user gesture, so "on by default" is not implementable, and unsolicited
-sound is the fastest way to lose a visitor regardless. One click starts it; the choice is
-remembered in `localStorage`. Audio is cheap, so like the ambient tier it is exempt from
+sound is the fastest way to lose a visitor regardless. One click starts it, and every page
+load starts from silence. Audio is cheap, so like the ambient tier it is exempt from
 the one-live-element rule — but it **must pause on `document.hidden`**, or it keeps playing
 in a background tab. `stage.registerAmbient` is that hook and this is its only member. It
 ships "Sakura Meditate Beat" by moodmode under the **Pixabay Content License** — free for
@@ -372,11 +372,15 @@ retroactively justifies the instrument on the wall.
 
 Three things fell out of building it that the plan did not have:
 
-- **A remembered preference is armed, not obeyed.** A page load is not a gesture, so the
-  resume attempt on a return visit is usually refused. When it is, the light stays off and
-  the stored preference is left alone, so the next click picks it up. The toggle resolves to
-  what *happened*, never to what was asked — which is also why the lit state is driven by
-  the attempt's result rather than by the click.
+- **The preference is not remembered, and the version that remembered it was wrong.** It
+  stored the choice and re-armed it at mount — *armed, not obeyed*, on the theory that a page
+  load is not a gesture and the browser would refuse. It does refuse, on every profile except
+  the one that has already earned an autoplay grant by playing this loop before: the visitor
+  who liked it. A preference that takes effect only where it is least wanted is not one. It
+  also made the speaker's light unreadable — `audioOn` could come up true at load, leaving the
+  LED lit over a silent room. The toggle still resolves to what *happened* rather than to what
+  was asked, which is why the lit state is driven by the attempt's result and not by the click;
+  a missing file or a codec Safari will not take is still a refusal.
 - **Nothing is fetched until the first click.** The `<audio>` element is built on first play,
   so a visitor who never touches the speaker never downloads the loop.
 - **Nothing on a control lights in a destination accent.** The accents are one per project
@@ -449,9 +453,16 @@ invalidates both the hotspot rectangles and the depth map. If geometry holds, th
 depth map is reused; verify by running Depth Anything over both and diffing.
 
 At night the window would otherwise go dark, and the window is the BirdLense hotspot — a
-black rectangle reads as dead. The feeder therefore carries **a small glowing ring around
-its camera lens**, spilling onto the seed tray. At night the window says *it is still
-watching*.
+black rectangle reads as dead. The feeder therefore carries **a small glowing ring around its
+camera lens**, spilling onto the seed tray. At night the window says *it is still watching*.
+
+**Built, and the ring ended up split across the two halves of the build.** The masters paint
+what a reconstruction can hold — a dark lens and a warm pool lying flat on the seed tray — and
+the ring itself is the `feeder-lens` entry in the ambient tier (`src/data/ambient.ts`), a
+screen-blended bloom pinned at the feeder's depth. It was painted into the night masters first
+and that failed on resolution, not on art direction: the feeder is ~11 splats across at 8.29m,
+and a glow in mid-air has no surface for the fit to attach it to. See docs/PROMPTS.md section
+B. The intent above is unchanged; only which half of the pipeline draws it.
 
 Every room control is a real focusable `<button>` and is mirrored in the corner UI, so
 none of this is mouse-only or discoverable by accident alone.

@@ -191,27 +191,67 @@ def write_table(path: Path, data: np.ndarray, shape: tuple[int, int]) -> int:
     return path.stat().st_size
 
 
+def encode(g: dict, grid: int, d_lo: float, d_hi: float,
+           s_lo: float, s_hi: float) -> dict:
+    """One reconstruction -> the four quantised tables the renderer reads.
+
+    **The ranges are arguments, not derived here, and that is the whole point.** Every cloud
+    in a bake - the day build and every variant - is quantised into the *same* disparity and
+    log-scale space, so that cell `i` of two files is not merely the same ray but the same
+    number line. The renderer morphs between two clouds by lerping the stored bytes; if each
+    file had normalised against its own min and max, that lerp would pass through positions
+    neither reconstruction ever held, and a season change would swim through the room.
+
+    It is also what stops `nearZ`/`farZ` from being a per-file accident. See `main()`.
+    """
+    xyz, scale, quat = g["xyz"], g["scale"], g["quat"]
+    fx, cx, cy, W, H, nh = g["fx"], g["cx"], g["cy"], g["width"], g["height"], g["n_half"]
+
+    z = xyz[:, 2]
+    px = xyz[:, 0] / z * fx + cx
+    py = xyz[:, 1] / z * fx + cy
+    cell = np.arange(len(xyz)) % nh
+    cx_px = (cell % grid + 0.5) / grid * W
+    cy_px = (cell // grid + 0.5) / grid * H
+    ox, oy = compand(px - cx_px), compand(py - cy_px)
+
+    disp = 1.0 / np.maximum(z, 1e-4)
+    q = np.clip(np.rint((disp - d_lo) / (d_hi - d_lo) * 32767.0), 0, 32767).astype(np.uint32)
+    geom = np.stack([ox, oy,
+                     (q >> 7).astype(np.uint8),
+                     (128 + (q & 127)).astype(np.uint8)], axis=1)
+    assert geom[:, 3].min() >= 128, "the geom alpha bias is what makes the raster robust"
+
+    alpha = np.where(g["alpha"] <= 0.02, 0.0, g["alpha"])
+    qn = quat / np.maximum(np.linalg.norm(quat, axis=1, keepdims=True), 1e-9)
+    qn = np.where((qn[:, 3] < 0)[:, None], -qn, qn)
+    rot = np.clip(np.rint(qn * 127.0 + 128.0), 0, 255).astype(np.uint8)
+    assert rot[:, 3].min() >= 128, "quaternion sign flip failed"
+
+    return {"geom": geom, "shape": quantise_log(scale, s_lo, s_hi), "quat": rot,
+            "alpha": np.rint(np.clip(alpha, 0, 1) * 255).astype(np.uint8)[:, None],
+            "z": z, "offsets": (px - cx_px, py - cy_px), "disp_q": q, "scale": scale}
+
+
 def check_variant_ply(name: str, path: Path, v: dict, base: dict,
                       grid: int, layers: int) -> None:
     """Assert a variant reconstruction indexes the same rays as the day one, and say how far
     its geometry drifted.
 
-    **What must match, and why it is an assertion rather than a warning.** Only `f_dc` is
-    taken from a variant ply; it is applied to the day build's splats by index. That is
-    sound exactly when cell `i` of one file is cell `i` of the other, which holds because
-    SHARP's grid is 768x768 hardcoded and predicted from a single camera - so identical
-    intrinsics, image size and count mean identical rays. Any of those differing means the
-    two files are not the same lattice and the colours would be scattered across the room.
+    **What must match, and why it is an assertion rather than a warning.** Cell `i` of one
+    file has to be cell `i` of the other, which holds because SHARP's grid is 768x768
+    hardcoded and predicted from a single camera - so identical intrinsics, image size and
+    count mean identical rays. That mattered when only `f_dc` crossed over, because colours
+    would otherwise scatter across the room. It matters *more* now that a variant ships its
+    own geometry: the renderer morphs between two clouds by lerping splat `i` of one toward
+    splat `i` of the other, so a mismatched lattice would not be a wrong colour, it would be
+    1.2M splats flying to the wrong places.
 
-    **What is allowed to differ, and what it costs.** The two runs fit independently, so a
-    splat's depth, size and rotation drift a little. `f_dc` is a blend coefficient, not a
-    surface colour - it is optimised so overlapping Gaussians sum to the master - so a
-    coefficient fitted for a slightly different Gaussian is slightly wrong on this one.
-    Measured day against night on this scene the median splat is within 0.9% in depth and
-    2% in size, with a real tail (p99 depth 56%, p10 scale 0.66). The tail is worth printing
-    because it is the one way this path can go wrong, and it is checked by rendering the
-    result at the home camera against the variant master - if the drift mattered, that error
-    rises above the day build's own.
+    **The drift printed below is no longer a risk being tolerated.** It used to be the thing
+    the colour-only path had to get away with, and it stopped getting away with it at winter
+    (p99 depth 1.222, against night's 0.478). Each variant now carries the geometry it was
+    fitted with, so this number is diagnostic rather than load-bearing: it says how much the
+    yard really changed between two masters, which is worth seeing.
     """
     for key, label in (("fx", "focal length"), ("cx", "principal x"), ("cy", "principal y"),
                        ("width", "master width"), ("height", "master height")):
@@ -277,49 +317,45 @@ def main() -> int:
     layers = len(xyz) // nh
     print(f"{len(xyz):,} splats = {layers} layers x {grid}x{grid}, master {W}x{H}")
 
-    # Near-invisible Gaussians cost a quad each and contribute nothing. Zeroing their
-    # opacity lets the fragment shader drop them without disturbing the grid the rasters
-    # are addressed by. Matches the prototype's `alpha > 0.02`.
-    alpha = np.where(alpha <= 0.02, 0.0, alpha)
 
-    # ---- geometry: cell ray + offset, and disparity -----------------------------------
-    z = xyz[:, 2]
-    px = xyz[:, 0] / z * fx + cx
-    py = xyz[:, 1] / z * fx + cy
-
-    cell = np.arange(len(xyz)) % nh
-    cx_px = (cell % grid + 0.5) / grid * W
-    cy_px = (cell // grid + 0.5) / grid * H
-
-    ox, oy = compand(px - cx_px), compand(py - cy_px)
-    report("offset x", px - cx_px, cx_px * 0 + uncompand(ox), "master px")
-    report("offset y", py - cy_px, cy_px * 0 + uncompand(oy), "master px")
-
-    # Disparity, not depth: it is linear in the parallax the camera actually produces, so
-    # the bits spend their precision where motion is visible instead of on the far wall.
+    # ---- every cloud in the bake, and one number line for all of them -------------------
     #
-    # **15 bits, and the low 7 live in the top half of the alpha channel.** The obvious
-    # encoding is 16 bits split evenly, high in B and low in A, and it is what this bake
-    # wrote until an image decoder ate it. `createImageBitmap` may honour
-    # `premultiplyAlpha: 'none'` by storing the image premultiplied and dividing alpha back
-    # out, rounding to 8 bits each way, which scales RGB by 255/A. With A free to be small
-    # that clamps B to 255 - disparity 1.0, the near plane - and measured on this scene it
-    # flung 12,679 splats to arm's length and moved 103,221 by more than 5% of their depth.
-    #
-    # Biasing A into [128, 255] costs one bit of disparity (0.03mm at the near plane,
-    # 0.37m at the far wall where nothing parallaxes) and bounds that round trip at one
-    # LSB, because the premultiply then quantises RGB in steps of 255/A <= 2. The renderer
-    # decodes exactly, and asserts the bias holds so a raster mangled in transit says so
-    # instead of drawing confetti.
-    disp = 1.0 / np.maximum(z, 1e-4)
-    d_lo, d_hi = float(disp.min()), float(disp.max())
-    q = np.clip(np.rint((disp - d_lo) / (d_hi - d_lo) * 32767.0), 0, 32767).astype(np.uint32)
-    report("depth", z, 1.0 / (d_lo + q / 32767.0 * (d_hi - d_lo)), "m")
+    # The variants are loaded *before* anything is quantised, because the ranges the
+    # quantisation uses have to span all of them. See `encode()`.
+    loaded = []
+    for n, vp in variants:
+        v = load_ply(vp)
+        check_variant_ply(n, vp, v, g, grid, layers)
+        loaded.append((n, vp, v))
 
-    geom = np.stack([ox, oy,
-                     (q >> 7).astype(np.uint8),
-                     (128 + (q & 127)).astype(np.uint8)], axis=1)
-    assert geom[:, 3].min() >= 128, "the geom alpha bias is what makes the raster robust"
+    clouds = [g] + [v for _, _, v in loaded]
+
+    # **Union ranges, not per-file ones, and they cost almost nothing.** Disparity is
+    # quantised linearly in 1/z, so extending the *far* end is nearly free at the near end
+    # where the parallax is: over these five reconstructions the union stretches farZ from
+    # 13.9m to 111m - winter's bare branches let distant sky through where summer's canopy
+    # stopped at the fence - and the p99 depth error inside 3m goes 0.110mm to 0.121mm.
+    #
+    # What it buys is that `nearZ`/`farZ` stop being a property of whichever master happened
+    # to be baked. They were per-file, and re-locking the masters moved farZ 98m -> 14m and
+    # silently changed what every authored disparity in src/data meant. Those are metres now
+    # (see roomGeometry.ts), and this is the other half of that fix.
+    d_lo = min(float((1.0 / np.maximum(c["xyz"][:, 2], 1e-4)).min()) for c in clouds)
+    d_hi = max(float((1.0 / np.maximum(c["xyz"][:, 2], 1e-4)).max()) for c in clouds)
+    s_lo = min(float(np.log(max(c["scale"].min(), 1e-9))) for c in clouds)
+    s_hi = max(float(np.log(c["scale"].max())) for c in clouds)
+    print(f"  {'shared range':<35} z {1/d_hi:.3f}..{1/d_lo:.2f}m   "
+          f"scale log {s_lo:.2f}..{s_hi:.2f}  over {len(clouds)} reconstruction(s)")
+
+    day = encode(g, grid, d_lo, d_hi, s_lo, s_hi)
+    geom, shape, rot, alpha8 = day["geom"], day["shape"], day["quat"], day["alpha"]
+    z = day["z"]
+    report("offset x", day["offsets"][0], uncompand(geom[:, 0]), "master px")
+    report("offset y", day["offsets"][1], uncompand(geom[:, 1]), "master px")
+    report("depth", z, 1.0 / (d_lo + day["disp_q"] / 32767.0 * (d_hi - d_lo)), "m")
+    report("scale (relative)", np.ones(day["scale"].size),
+           (np.exp(s_lo + shape.astype(np.float32) / 255 * (s_hi - s_lo)).ravel()
+            / np.maximum(day["scale"].ravel(), 1e-9)), "x")
 
     # ---- colour -----------------------------------------------------------------------
     #
@@ -349,18 +385,18 @@ def main() -> int:
 
     colour = pack(col)
 
+
     # ---- variant colours ---------------------------------------------------------------
     #
-    # **One geometry, N colours, and each colour comes from its own reconstruction.**
-    # A variant ply is SHARP run again on the variant master. Only its `f_dc` is taken;
-    # position, size, rotation and opacity stay the day build's, so every authored number in
-    # the app - the aim points in hotspots.ts, the disparities in ambient.ts, the excursion
-    # in scene.ts - is still measured against the cloud that ships, and a crossfade dissolves
-    # between two colours rather than swimming between two clouds. The payload is one extra
-    # colour raster, the same as the inferred path cost.
+    # **A variant is a whole second reconstruction: its own colours and its own geometry.**
+    # A variant ply is SHARP run again on the variant master, and all four tables cross over
+    # - see the note at `encode` in the loop below for why splitting them is not an option.
     #
-    # SHARP's grid is 768x768 predicted from one camera, so cell `i` is the same ray in both
-    # reconstructions; `check_variant_ply` asserts the framing that guarantees it.
+    # SHARP's grid is 768x768 predicted from one camera, so cell `i` is the same ray in every
+    # reconstruction; `check_variant_ply` asserts the framing that guarantees it. That is what
+    # keeps the app's authored numbers valid across all six: the aim points in hotspots.ts and
+    # the distances in ambient.ts are in *metres* against one shared quantisation range, not
+    # in any one cloud's coordinates.
     #
     # **Settled: a variant's colours are never inferred from an image of it.** A previous
     # build took a pixel-registered night *edit* of the master and moved every splat's colour
@@ -381,36 +417,43 @@ def main() -> int:
     # 7.94 against its own master. If a variant ever has no reconstruction, it does not get
     # a raster - it gets a reconstruction.
     variant_colours = []
-    for n, p in variants:
-        v = load_ply(p)
-        check_variant_ply(n, p, v, g, grid, layers)
+    variant_tables = []
+    for n, vp, v in loaded:
         c = np.clip(v["rgb"], 0, 1)
         if not args.no_despeckle:
             c = despeckle(c, grid, layers)
-        print(f"  {p.name:<35} from its own reconstruction, mean level "
+        print(f"  {vp.name:<35} from its own reconstruction, mean level "
               f"{c.mean() / col.mean():.3f}x the day fit")
         variant_colours.append((n, c))
-    variant_rasters = [(f"color-{n}", pack(c)) for n, c in variant_colours]
-
-    # ---- shape ------------------------------------------------------------------------
-    s_lo = float(np.log(max(scale.min(), 1e-9)))
-    s_hi = float(np.log(scale.max()))
-    shape = quantise_log(scale, s_lo, s_hi)
-    report("scale (relative)", np.ones(scale.size),
-           (np.exp(s_lo + shape.astype(np.float32) / 255 * (s_hi - s_lo)).ravel()
-            / np.maximum(scale.ravel(), 1e-9)), "x")
-
-    # ---- rotation ---------------------------------------------------------------------
-    # 8-bit is what the .splat format already uses for quaternions and what the prototype
-    # renderer ran on, so this is a proven precision rather than a chosen one.
-    #
-    # The sign flip is free and buys the same protection the disparity bias does: q and -q
-    # are the same rotation, so choosing the sign that makes the component stored in alpha
-    # non-negative pins that channel to [128, 255] without changing the ellipsoid at all.
-    qn = quat / np.maximum(np.linalg.norm(quat, axis=1, keepdims=True), 1e-9)
-    qn = np.where((qn[:, 3] < 0)[:, None], -qn, qn)
-    rot = np.clip(np.rint(qn * 127.0 + 128.0), 0, 255).astype(np.uint8)
-    assert rot[:, 3].min() >= 128, "quaternion sign flip failed"
+        # **And its geometry, which is the thing that makes a season correct.** Only `f_dc`
+        # used to cross over, on the argument that one cloud plus N colours keeps every
+        # authored number valid and dissolves rather than swims. It held for night and broke
+        # for winter: a variant master may relight any surface but may not *move* one, and
+        # winter's yard is bare branches against distant snow where summer's is a leafy
+        # canopy near the glass. Colours fitted for one landed on the other - smeared
+        # branches, string-light bulbs turned to soft blobs, a ghost streak across the panes.
+        #
+        # Measured at the home camera against each variant's own master (MAE/255), the
+        # window band: day geometry 6.17, its own 5.58; at the feeder 8.22 against 6.27.
+        # And there is no middle: lending a variant its own `scale` on the day build's
+        # centres scores **41.50** at the feeder, because position, scale, rotation and
+        # `f_dc` are one joint fit and half of two solutions satisfies neither. All four
+        # tables travel together or none do.
+        e = encode(v, grid, d_lo, d_hi, s_lo, s_hi)
+        variant_tables.append((n, e))
+        drift = np.abs(e["z"] - z) / np.maximum(z, 1e-6)
+        print(f"  {'':<35} its own geometry, depth p50 {np.median(drift):.3f} "
+              f"p99 {np.percentile(drift, 99):.3f} from the day build")
+    # Packed with the *variant's* own opacity, not the day build's. It used to share it by
+    # construction - same cloud, same alpha - and now that each variant carries its own
+    # geometry, the opacity belongs with the rest of that fit.
+    by_name = dict(variant_tables)
+    variant_rasters = [(f"color-{n}", np.concatenate(
+        [np.rint(c * 255).astype(np.uint8), by_name[n]["alpha"]], axis=1))
+        for n, c in variant_colours]
+    for n, e in variant_tables:
+        variant_rasters += [(f"geom-{n}", e["geom"]), (f"shape-{n}", e["shape"]),
+                            (f"quat-{n}", e["quat"])]
 
     # ---- write ------------------------------------------------------------------------
     #
@@ -455,7 +498,7 @@ def main() -> int:
                                  ("shape", shape, "RGB", lossless),
                                  ("quat", rot, "RGBA", lossless)] + [
                                  (n, d, "RGBA", lossless) for n, d in variant_rasters]:
-        if name in TABLES:
+        if name.split("-")[0] in TABLES:
             path = args.out_prefix.with_name(f"{args.out_prefix.name}-splat-{name}.bin")
             size, err = write_table(path, data, shp), 0
         else:
@@ -504,7 +547,9 @@ def main() -> int:
         b"".join(hashlib.sha256(f.read_bytes()).digest() for f in written)
     ).hexdigest()[:12]
 
-    near, far = float(z.min()), float(z.max())
+    # From the shared range, so every cloud in this bake agrees and a re-bake cannot
+    # silently redefine what a stored distance means. src/data carries metres.
+    near, far = 1.0 / d_hi, 1.0 / d_lo
     fov = float(np.degrees(2 * np.arctan(H / 2 / fx)))
     diag = float(np.hypot(W, H))
     manifest = {
@@ -514,6 +559,15 @@ def main() -> int:
         # renderer treats an absent or unknown name as "day" and draws the base raster, so
         # dropping a variant from a bake degrades to the day room rather than to nothing.
         "variants": [n for n, _ in variants],
+        # Which variants ship their own geometry as well as their own colour, as
+        # `-splat-{geom,shape,quat}-<name>`. A name absent here is colour-only and the
+        # renderer keeps the day cloud under it — the original "one geometry, N colours"
+        # path, still the right answer whenever a master really does only change the light.
+        "variantGeom": [n for n, _ in variant_tables],
+        # Per-variant Adler-32 of the geom table, same guard as the day build's above: the
+        # renderer recomputes it off the GPU and refuses to trust a raster that disagrees.
+        "variantAdler32": {n: int(zlib.adler32(e["geom"].tobytes()) & 0xFFFFFFFF)
+                           for n, e in variant_tables},
         # **What the renderer clears to, per variant, and it is not decoration.** Any pixel
         # no splat covers takes this colour, and the camera opens such pixels every time it
         # leaves centre: disocclusion at a silhouette is a hole, and a hole is the clear

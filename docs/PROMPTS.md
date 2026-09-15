@@ -11,6 +11,10 @@ every other variant. All hotspot rectangles and the depth map are derived from i
 regenerate a variant from the base text prompt — variants are _edits_ of a locked image,
 because edits preserve registration and fresh generations drift.
 
+The master can still be changed, but it is a re-lock and not an edit: everything downstream is
+rebuilt from it. See [A-relock](#a-relock--changing-the-locked-master-on-purpose) for when that
+is worth doing and the order to do it in.
+
 **Under the splat build, registration is no longer a matter of looking right — it is sampled.**
 The shipping build bakes geometry once from the day master and gives each variant only a
 recoloured `-splat-color-*.webp`, whose colours are read out of the variant image at each
@@ -26,13 +30,56 @@ lamp, indicator LEDs. Adding an object at night changes geometry and costs us th
 depth map.
 
 The one that is easy to miss is the **bird feeder's camera lens**, because at rest it is a
-16-device-pixel dark dot and reads as nothing. B and F both light a warm ring around it, so if
-the day master does not carry the lens, night has to invent it — and that is new geometry in
-the layer the depth map is built from. Check it before locking a master. A detail too small to
+16-device-pixel dark dot and reads as nothing. No prompt lights it any more — `src/data/
+ambient.ts` draws that glow live — but the overlay needs the module to be *there*. It is
+`screen`-blended, so it shows only where the backdrop has headroom, and a dark lens in a dark
+housing is what gives it any; over a lens the day master never painted, the light has nothing
+to sit on and nothing to explain it. Check it before locking a master. A detail too small to
 matter visually can still be load-bearing for a variant.
 
-**3. Seasons live outside the glass only.** No indoor seasonal changes, no fireplace — the
-interior is identical across all variants so one depth map serves everything.
+**3. A variant may change any pixel's colour and no pixel's geometry.** That is the real
+constraint, and it is stricter than the "seasons live outside the glass only" rule it replaces
+— which said the interior had to be identical across variants so one depth map could serve
+everything, and which B has never obeyed: night relights the whole room.
+
+The splat build is what makes the true rule sayable. Geometry is baked once from the day master
+and every variant contributes only `f_dc`, so **colour is free and shape is not**. Relighting a
+surface that is already there costs nothing: the splat stays where it is and changes hue, which
+is what night does to the whole interior and what autumn does to the tree. Adding an *object*
+has no such path — there are no splats for it, so its colour is painted onto whatever happens
+to be behind it, at that thing's depth. A low pumpkin resting on a bed the master already
+contains is a recoloured patch of bed and survives; the same pumpkin standing proud of the bed
+top against the fence is fence-coloured geometry wearing orange, and it swims the moment the
+camera moves sideways.
+
+So: **no new objects, indoors or out, and nothing that changes a silhouette.** Seasons are
+re-skins. Autumn thins a real tree; our autumn tree keeps every leaf and changes colour, because
+a gap the day master does not have is sky pixels landing on a leaf-depth splat. No fireplace,
+not because it is indoors, but because it is a thing that is not there.
+
+> **Relaxed, 2026-09-13.** Every variant now ships its own geometry as well as its own colour,
+> so outside the glass a season *may* move surfaces — winter's tree is allowed to be bare. What
+> survives is that every master shares the day's **framing** (same camera, intrinsics and pixel
+> size), because cell `i` of SHARP's 768x768 grid has to be the same ray in every
+> reconstruction; and that anything *clickable* stays where the day master put it, since
+> `hotspots.ts` rects and distances are authored against it once. The paragraphs above still
+> describe the colour-only path, which the bake still supports and which is still right for a
+> master that genuinely only changes the light. See docs/SCENE-SPLAT.md.
+>
+> **Relaxed again, 2026-09-14 — and the same rule reaches inside.** "No new objects, indoors or
+> out" was one sentence doing two jobs, and only one of them was about the room being indoors.
+> A variant carrying its own geometry may add an object *anywhere*, because there are splats
+> for it now; winter uses this for a throw over the chair (section E). The constraint that
+> replaces it is not about which side of the glass a thing is on, it is about which pixels are
+> spoken for: **every rect in `src/data/hotspots.ts`, `src/data/controls.ts` and
+> `src/data/ambient.ts` is authored once against the day master and shared by all six clouds,**
+> so a seasonal object must miss all of them. Overlap the rover's wake rect and hovering the
+> rover lights up whatever is standing there.
+>
+> Two costs remain, and neither is a rule: a new object has to clear SHARP's resolution floor
+> (~11 splats across the bird feeder at 8.29m — section B), and it has to be drawn *once* and
+> relit, which is why a season that changes the room must be the parent of its own night
+> (section F).
 
 **4. Generate at the largest resolution the generator offers — 4K, not 2K.** The master is
 committed and never served, so its resolution costs nothing at runtime; what ships is
@@ -50,6 +97,19 @@ pixels wide, so
 No realistic master survives a _full_ push, which is why the ladder has `close-` plates:
 the master carries the first part of the push and a fill-frame plate takes over. But 4K is
 the smallest master that is sharp **at rest**, and the room at rest is the landing page.
+
+**The splat build does not run that arithmetic.** SHARP's grid is 768x768 hardcoded, so the
+room is 1.18M splats whatever it was reconstructed from, and no master pixel is ever displayed
+— each splat's colour is one coefficient averaged over ~7 master px. Source resolution
+saturates near 1536px. **2K is enough**, and the only thing 4K buys is the fallback poster
+(2752x1536, on screen for the second the rasters take and permanently for no-WebGL2 and
+reduced-motion). Spend 4K on a master you are locking for years, not on the rolls it takes to
+get there.
+
+**Aspect ratio still matters at any resolution.** The master is 5504x3072 = 1.7917, not 16:9
+(1.7778): a tool that returns 16:9 has cropped or stretched, and 0.8% is 44px of drift at the
+frame edge. A uniform rescale that keeps the aspect is fine — resample it back up, normalised
+coordinates are unchanged. **Check the returned dimensions before using any file.**
 
 Resolution buys sharpness and _nothing else._ It does not reduce silhouette smearing, which
 is geometric — a 4K master gives sharper smears. It does not improve masks either: SAM
@@ -226,16 +286,51 @@ pixel-identical across every seasonal variant — nothing new ever goes on the g
 | —   | Empty plates        | edit of A — **not a variant, never served**; see A-empty | `art/fills/room-day-summer-layer0-fill.png` |
 | B   | Night / summer      | edit of A                                                | `room-night-summer.jpg`                     |
 | C   | Day / spring        | edit of A                                                | `room-day-spring.jpg`                       |
-| D   | Day / autumn        | edit of A                                                | `room-day-autumn.jpg`                       |
+| D   | Day / autumn        | edit of A                                                | `room-day-fall.jpg`                         |
 | E   | Day / winter        | edit of A                                                | `room-day-winter.jpg`                       |
-| F   | Night / winter      | edit of B                                                | `room-night-winter.jpg`                     |
+| F   | Night / winter      | edit of **E**                                            | `room-night-winter.jpg`                     |
+| G   | Night / autumn      | edit of **D**                                            | `room-night-fall.jpg`                       |
 
-A and the empty plates are the whole of phase one; B-F are a later phase.
-Summer needs no variant — A and B _are_ summer. Night in spring and autumn is
-indistinguishable through dark glass, so only winter earns a night variant.
+A and the empty plates are the whole of phase one; B-G are a later phase.
+Summer needs no variant — A and B _are_ summer. Spring maps to summer and earns no
+reconstruction at all (`variantFor` in `src/data/scene.ts`), which leaves three seasons and two
+times of day: six cells, five images.
 
-From C–F we crop the window region and composite it behind the window plane at runtime.
-A and B ship whole.
+**A night is an edit of its own season's day, not of B.** F and G both parent that way, and the
+reason is in each of their sections; the general form is that once a variant may change the
+room — which per-variant geometry allows and winter uses — an object added to a season must be
+drawn *once* and relit, never drawn twice by two model passes that will disagree about it. B
+stays the parent only for a season whose interior is identical to summer's, and there is no
+longer one.
+
+**The naming in this table is the filename, and the filename says `fall`.** The prose here says
+autumn and the code says `fall` (`variants` in `src/data/scene.ts`, `/art/room-day-fall.webp`).
+Only one of those is load-bearing: the variant name is a string that has to match across the
+bake flag, `variants`, `variantStill` and the fetched filenames. Write `fall` in anything a
+machine reads.
+
+**All of them ship whole.** Cropping the window region out of C–G and compositing it behind a
+separate window quad was the layered build's plan, and the splat build retired it: a variant is
+a second SHARP reconstruction of the *whole* edited master, so there is no window plane to
+composite behind and nothing to crop. See [SCENE-SPLAT.md](SCENE-SPLAT.md).
+
+**A variant carries its own geometry, not just its own colours.** It used to contribute only
+`f_dc` and borrow the day build's cloud, which is cheaper and is still what the renderer would
+do for a variant with no `-geom-<name>.bin`; winter ended it, because a yard of bare branches is
+not a yard of leafy canopy relit. What registration still requires is only that every master
+share the day's *framing* — same camera, same intrinsics, same pixel size — so that cell `i` of
+the 768x768 grid is the same ray in every reconstruction.
+
+Per variant that means: an edited master in `art/`, a `.ply` beside it from SHARP (gitignored),
+a `--variant <name>=art/<master>.ply` flag on the bake, the name added to `variants` in
+`src/data/scene.ts`, and a poster in `variantStill`. The site downloads one extra ~2.4 MB colour
+raster plus ~11 MB of geometry, fetched only when that season is actually switched to — the
+initial load is unchanged, because a visitor opens exactly one cloud.
+
+**Every authored number in `hotspots.ts`, `controls.ts` and `ambient.ts` is still written once,
+against the day master, and shared by all of them.** That is the constraint a seasonal object has
+to respect: it may occupy any part of the room those rects do not claim, and none of the parts
+they do.
 
 ## Where the files live
 
@@ -684,6 +779,69 @@ invented. That is the path for a master that has masks authored against it — n
 which has none yet.
 ---
 
+## A-relock — changing the locked master on purpose
+
+The autumn roll came back with a gold canopy filling the upper left of the window, where the
+master has sky. Rule 3 means a variant cannot carry it: lateral shift at full excursion is
+`0.12 / z x 4370` master px, so a tree at ~12m should move 44px and painted onto sky splats at
+108.9m it moves 5px — ~40px of shear against the fence, on the one region the camera magnifies.
+
+Delete it or re-lock, and the test is **is this thing permanent?** A tree is, and belongs in the
+master where every season gets it free as a recolour. A pumpkin is not, and needs none of this:
+it lies on ground the master already has, at roughly the right depth.
+
+### The prompt
+
+Attach the day master **and** the autumn roll, in that order. Words will not reproduce that
+canopy; the reference image is the spec.
+
+```text
+The first image is the original. The second is a seasonal version of the same room, included
+only as a reference for one element.
+
+Add the tree that appears outside the window in the second image to the FIRST image — same
+place, same size, same shape — but in full summer leaf, deep green, lit by the same summer
+sunlight as the rest of the first image.
+
+Change nothing else. Take nothing else from the second image: not the autumn colours, the
+fallen leaves, the pumpkins or the low golden light. Everything inside the room, the window
+frame and its white bars, the curtains, the fence, the bird feeder and the songbird stay
+exactly as they are in the first image.
+
+Do not crop, zoom, straighten, resize or re-frame. Output at exactly the same pixel size as
+the first image. Same painterly style and palette. No readable text anywhere.
+```
+
+### Check the interior before trusting it
+
+Every other edit here is asked for colour; this one is asked for geometry, and the interior is
+where the authored coordinates live — hotspot rects, `masks-manual/`, wake crops, every
+`disparity`. None of them would announce a two-pixel drift.
+
+Diff the result against A and look at the *room*, not the window. Unchanged, nothing to do. If
+it drifted, paste the new yard into A instead of accepting the new frame — the interior is then
+A's own bytes. Glazing bars are the judgement call in that paste: near depth, largest parallax,
+so diff across the window (white bars on a dark yard is the highest-contrast edge in the
+picture) and keep A's bars too if they moved.
+
+### What re-locking costs, in order
+
+1. **Composite/verify** as above → the new `art/room-day-summer.jpg`.
+2. **Night**, re-run from prompt B against the new master, including the hand-erase of the
+   painted speaker LED. It cannot be composited — it relights the whole interior.
+3. **SHARP** on both → two new PLYs.
+4. **Re-bake**, and re-copy `nearZ`/`farZ`/`fovDeg` into `scene.ts` from the new manifest.
+5. **Re-probe** every authored `disparity` (`tools/splat_probe.py`) and the hotspot aim points.
+6. **New posters**, then verify at `/dev/splat` and under drift.
+
+Hotspot rects and wake masks survive untouched — that is what step 1 buys. Regenerate autumn
+last, from the new master.
+
+**The cheap alternative:** re-roll autumn with "do not add any trees, plants or objects that are
+not in the attached image" in the `IMPORTANT` block. One generation instead of a day. Re-lock
+only because the tree is worth having in every season — and if you do, **batch it**: the next
+re-lock costs the same again.
+
 ## A-empty — The empty plates (edits of A)
 
 **A and EMPTY-0 are the only two generations the room needs.** B-F below are a separate,
@@ -877,7 +1035,16 @@ their exact positions PERFECTLY identical — change only the lighting and the v
 window. Do not crop, zoom, straighten, resize or re-frame, and output at exactly the same
 pixel size as the input.
 
-Inside, the room is lit only by warm practical light, and the string lights carry it:
+The sun has set, so start with the floor — it is the largest change in the picture. The wooden
+boards are one continuous dark tone from the window all the way to the desk, about as dark as
+the wall behind the chair, the grain only just readable, the same depth of shade along their
+whole length. Three soft pools of light rest on that dark floor and nothing else does: a warm
+amber ellipse roughly a metre across at the foot of the floor lamp on the left, a smaller amber
+pool on the boards beneath the desk, and a faint cool wash of monitor light in front of the
+desk. The rug is evenly dark in the same way, its pattern readable only where lamplight reaches
+its edge.
+
+The rest of the room is lit only by warm practical light, and the string lights carry it:
 
 - The strand along the top of the window and down its casing is lit — every small bulb a warm
   amber point, bright enough to read as the room's main decoration, throwing a gentle warm
@@ -896,32 +1063,90 @@ Deep warm shadows everywhere else — rich and cosy rather than black. The room 
 lamplit and lived-in at night, not as a dark room.
 
 Outside it is a summer night: deep blue sky with a few stars, the neighbouring rooftop in
-silhouette, the garden in deep blue shadow. The bird feeder outside stays clearly visible, lit
-by a small warm glowing ring around its camera lens casting a soft pool of light onto its seed
-tray. Keep that ring modest and contained — a small ring and a small pool, not a lantern.
+silhouette, the garden in deep blue shadow. The tree outside the window keeps its exact shape
+and size and stands in dark silhouette against the sky. The bird feeder and the songbird stay
+exactly where they are and the feeder stays clearly visible. Its camera lens stays the small
+dark dot it is in the day image. The seed tray directly below the lens catches a small warm
+pool of light that lies flat on the tray's own surface and fades out before it reaches the
+feeder's walls.
 
-IMPORTANT: remove ALL daylight from the room. There must be no bright sunlit shafts or
-window-shaped patches of sunlight anywhere on the floor, the rug or the walls — those are
-daylight and must be replaced by warm pools of lamplight and cool spill from the monitors. The
-glass prism on the cabinet top stays exactly where it is but is now unlit: dark glass catching
-a little lamplight, with no spectrum, no rainbow and no glow of its own.
+The brightest shapes anywhere in the picture are the lamp shades, the string-light bulbs, the
+monitor panels and the small indicator lights; nothing else in the room is brighter than those.
+The glass prism on the cabinet top stays exactly where it is but is now unlit — dark glass
+catching a little lamplight, with no spectrum, no rainbow and no glow of its own.
 
 Every object stays exactly where it is and keeps its exact shape: the window and all its white
 dividing bars, the curtains, the desk and both monitors, the guitar, the framed poster, the
-shelf, the cabinet, the printer, the plants, the chair, the rover and the rug. Nothing is
+shelf, the cabinet, the printer, the plants, the chair, the rover, the rug, and the tree and
+fence outside. Nothing is
 added, removed, moved or resized — only the light on it changes.
 
 Same painterly style, same brushwork, same palette relationships, inverted for night. No
 readable text anywhere.
 ```
 
-**Keep the feeder's lens ring modest.** `src/data/ambient.ts` already draws a live pulsing glow
-at that exact rect (`feeder-lens`), so the painted ring is the fixture the pulse sits on top of,
-not the effect itself. Painted too hot, the two stack and the feeder blooms.
+**When the floor keeps its sun patches, do not argue with the prompt — run a second pass.**
+This is the one defect B reliably produces, because those patches are the highest-contrast
+structure on the floor and an edit model preserves structure. Negation makes it worse: "no
+window-shaped patches of sunlight on the floor" puts that phrase in the conditioning, which is
+why the paragraph above describes the dark floor affirmatively instead. If a patch survives
+anyway, attach the night render and ask for that one thing, the way A-fix does:
+
+```text
+Edit the attached image. Keep everything exactly as it is — same composition, same objects,
+same lighting everywhere else — and change only this: the floor between the cabinet and the rug
+still carries a pale patch of light shaped like the window. Repaint that area in the same deep
+shadowed brown as the floorboards immediately to its left, with the same grain and the same
+warmth, so the floor reads as one continuous unlit surface. Nothing else in the picture
+changes.
+```
+
+Failing that, fix it by hand. It is a low-frequency luminance error on a flat surface, so it
+survives a repaint — the fit re-runs on whatever the master says — and B already has precedent:
+the painted speaker LED was erased by hand and SHARP re-run on the result.
+
+**The feeder's ring is not painted any more — `src/data/ambient.ts` draws it.** The masters
+carry a dark lens and a lit tray; the glow itself is the `feeder-lens` entry in the ambient
+tier, a screen-blended radial bloom pinned at 8.29m in BirdLense's accent, blinking on a
+camera's cadence.
+
+**A glow in air has no surface, and SHARP fits surfaces.** The feeder is ~160 master px at 8.3m
+seen through glazing bars — roughly **11 splats across**, the reconstruction's floor — and the
+ring is two or three of those. With nothing to attach them to, the fit scatters them over
+whatever depths are nearby: the glass at 4m, the feeder at 8.3m, the fence behind it. That is
+why the ring rendered as a broken C on every night variant including summer's, why giving
+winter its own geometry only half fixed it, and why making the ring crisper only half fixed it
+again. It is a **resolution floor, not a bad fit**, and no wording gets under it. Three prompt
+revisions were spent proving that.
+
+**The overlay cannot have that problem.** It is not geometry, so there is nothing to
+reconstruct and nothing to smear; it is pinned by depth, so it parallaxes with the feeder
+rather than sliding off it; and it can blink, which paint never could.
+
+**A lit seed tray is the opposite case and stays in the masters.** Light lying on a horizontal
+surface at a known depth is colour on splats that are already correctly placed, which is the
+thing a variant master does well. It also gives the overlay somewhere to land: a bloom over an
+unlit tray reads as a sticker, and a bloom over a tray already catching light reads as its
+source.
+
+**The general rule, and F applies the same one to the outdoor bulbs:** a variant may relight a
+*surface* at any scale, but a light source floating in air has to be big enough to reconstruct.
+Below the splat floor, it belongs in the DOM.
+
+Note that all three night prompts describe the lens **affirmatively** — "stays the small dark
+dot it is in the day image" — for the reason the sun-patch note above gives. Asking for "no
+glowing ring" puts the ring in the conditioning.
 
 ---
 
 ## C — Day / spring (edit of A)
+
+**Still written in the layered build's idiom** — freeze the room, edit a window crop — which is
+what C and E were for when a window quad was going to be composited behind the glass. Under the
+splat build that leaves a season visible only through 12% of the frame. Bring them up to D's
+shape before generating either: same lock on geometry, but the interior light in scope. Spring
+wants a higher, cooler, whiter sun and shorter patches; winter wants a flat, pale, shadowless
+overcast with the snow outside bouncing light back up onto the ceiling.
 
 ```text
 Edit this image. Change ONLY the view outside the window — every element inside the room,
@@ -938,48 +1163,304 @@ exactly where they are.
 
 ## D — Day / autumn (edit of A)
 
-```text
-Edit this image. Change ONLY the view outside the window — every element inside the room,
-the window frame, the curtains, the lighting inside and the camera angle stay PERFECTLY
-identical.
+Attach the locked day image A.
 
-Outside it is autumn: the fruit tree has turned gold and amber with some leaves fallen on
-the grass, the raised beds are spent and mostly bare with a few last plants, the grass is
-duller green scattered with fallen leaves, the raspberry canes have reddened. Lower, more
-golden sunlight and a slightly hazier sky. The bird feeder on the fence and the songbird
-stay exactly where they are.
+**Written for the splat build, which changes two things.** The interior is in scope — nothing is
+composited behind a window plane any more, and a season visible only through 12% of the frame
+is not one — so autumn's real signal is the light: lower, longer, more golden. That is free,
+because it is colour. And rule 3 binds hard: pumpkins are allowed only lying on ground the
+master already has, and the canopy keeps its shape and density and changes only hue, because a
+generator asked for autumn thins the tree and bare branches mean sky pixels on leaf-depth
+splats.
+
+```text
+Edit this image to late autumn. Keep the composition, camera angle, furniture, objects and
+their exact positions PERFECTLY identical — change only the light and the colours. Do not
+crop, zoom, straighten, resize or re-frame, and output at exactly the same pixel size as the
+input.
+
+Outside the window it is a golden October afternoon:
+
+- The trees have turned — the large one filling the upper left of the window and the fruit
+  tree by the beds — deep gold, amber and rust. They keep exactly the same shapes, the same
+  branches and the same full heads of leaves they have now; it is the colour that changes,
+  not the trees. No bare branches and no gaps of sky where there are leaves today.
+- The lawn is duller, cooler green, drifted with fallen gold and brown leaves — thickest
+  under the tree and along the foot of the fence.
+- The raised beds are spent: the summer planting has gone over to yellowing stems and a few
+  last dark leaves, with bare dark soil showing between them.
+- Two or three small pumpkins and a couple of squat gourds, deep orange and cream, lying
+  directly on the soil of the nearest raised bed and on the grass beside it. Keep them low
+  and resting flat on the ground — none of them stacked, none on a crate or a step, none
+  tall enough to break the line of the bed's edge or to show against the fence or the sky.
+- The raspberry canes have reddened. The fence, the beds, the patio and the neighbouring
+  rooftop keep their exact shapes.
+- The bird feeder on the fence and the songbird stay exactly where they are and exactly as
+  they are.
+
+Inside, it is the same room in later, lower, warmer sunlight. The sun is further round and
+closer to the horizon, so the light comes in at a shallower angle: the window-shaped sun
+patches are longer and stretch further across the floor and the rug, the whole room is
+warmer and more golden than it is now, and the shadows are longer and softer with a slight
+haze in the air where the light crosses it. The glass prism on the cabinet top still stands
+in the sun and still throws its spectrum across the surface it sits on. Every lamp, screen
+and indicator stays exactly as it is — the desk lamp, the floor lamp, the string lights and
+the monitors are unchanged, and the grey speaker beside the printer stays dark with nothing
+on it lit.
+
+IMPORTANT: every object stays exactly where it is and keeps its exact shape and size — the
+window and all its white dividing bars, the curtains, the desk and both monitors, the
+guitar, the framed poster, the shelf, the cabinet, the printer, the plants, the chair, the
+rover and the rug. Nothing anywhere in the picture is added, removed, moved, resized or
+reshaped, indoors or outdoors, except the pumpkins and gourds lying on the ground outside.
+Only colour and light change.
+
+Same painterly style, same brushwork, same palette relationships, shifted toward autumn. No
+readable text anywhere.
 ```
+
+**If the pumpkins swim, drop them** — same prompt minus the pumpkin bullet and the last clause
+of the `IMPORTANT` block. Autumn carries on the tree, the leaf drift, the spent beds and the low
+light, all pure re-skins. Judge it on the render under drift, not on the master.
+
+**Wiring:** SHARP on `art/room-day-fall.jpg`, `--variant fall=...` on the bake, `'fall'` in
+`variants` plus a poster in `variantStill` (`src/data/scene.ts`). What it has no way to be *chosen*
+by yet: `daylight.ts` switches on the clock and the control is a two-state toggle. A season is not
+a time of day, and that decision is separate from generating the image.
 
 ## E — Day / winter (edit of A)
 
-```text
-Edit this image. Change ONLY the view outside the window — every element inside the room,
-the window frame, the curtains, the lighting inside and the camera angle stay PERFECTLY
-identical.
+**The lamps are on, and that is what makes winter cosy.** A grey day with the practicals lit is
+both physically right and the warmest picture in the set — it keeps rule 4's warm room while the
+cold stays behind the glass. It also does the floor a favour: the model gets warm pools to paint
+rather than an absence to honour.
 
-Outside it is winter: everything is under a clean blanket of snow — snow on the ground,
-capping the raised beds, along the top of the wooden fence, on the neighboring rooftop
-and on the bare branches of the leafless fruit tree. The potted citrus trees are gone
-from the patio (overwintered indoors). Cool, pale, low winter light and a soft overcast
-white-blue sky. Snow caps the roof of the bird feeder, but the feeder itself and the
-songbird stay exactly where they are.
+**The trees may now go bare.** This used to say they had to keep their crowns, because bare
+branches where the day master has canopy meant sky colour landing on leaf-depth splats. Winter
+carries its own geometry now, so the yard is free to be a different shape — see rule 3.
+
+**And one thing is added indoors: a throw over the chair.** The same relaxation reaches inside
+the glass, with one constraint that does not relax — every rect in `src/data/hotspots.ts`,
+`src/data/controls.ts` and `src/data/ambient.ts` is authored once against the day master and
+shared by all five clouds, so a winter-only object must miss all of them. Overlap the rover's
+wake rect and hovering the rover would light up whatever is standing there. The chair back is
+clear of every one.
+
+**A small Christmas tree was considered for the same slot and turned down.** Not on SHARP's
+account — the failure in F below is two strings of bulbs a few pixels apart with four metres of
+glass between them, and an object standing in the room is at one unambiguous depth with its
+lights on its own surface, which is the case the two indoor strands already prove works. It was
+turned down on the calendar. `WINTER_MONTHS` is `[11, 0, 1]`, so winter runs thirteen weeks and
+a tree is right for about five of them; a decorated tree in February does not read as festive,
+it reads as nobody took it down. This is the same argument F already makes about recolouring the
+indoor bulbs, and it is the argument that should be applied to anything seasonal *inside* the
+room: it has to be right for the whole season the switch selects, not for the holiday inside it.
+A blanket is right for all thirteen weeks.
+
+```text
+Edit this image to a winter afternoon. Keep the composition, camera angle, furniture, objects
+and their exact positions PERFECTLY identical — change only the light and the view outside the
+window. Do not crop, zoom, straighten, resize or re-frame, and output at exactly the same pixel
+size as the input.
+
+The sky is overcast, so start with the floor — it is the largest change in the picture. The
+light on the wooden boards is soft, even and shadowless: the same gentle brightness by the
+window as under the desk, with no edges anywhere in it, the way an overcast sky lights a room
+through glass. The boards read as one continuous cool-toned surface along their whole length,
+and the rug's pattern is evenly legible right across it.
+
+Because the day is grey, the room's own lamps are switched on and they carry the warmth. The
+floor lamp on the left glows, the desk lamp glows over the desk, and both strands of string
+lights are lit — the one along the top of the window and down its casing, and the one along the
+wooden shelf on the right wall — every small bulb a warm amber point. A warm amber pool sits on
+the floor beneath the floor lamp and another beneath the desk, resting on top of the flat cool
+daylight, and both monitors add their cool blue spill across the desk and the wall behind them.
+The room reads as cosy and lamplit on a grey day: warm inside, cold outside.
+
+One thing is added to the room and nothing else: a soft knitted throw blanket, in warm muted
+oatmeal and rust that sit with the rug's colours, is draped over the back of the desk chair and
+hangs down its side in loose folds. It rests on the chair only — it does not cover the seat, and
+it does not touch the desk, the floor or anything standing on either.
+
+Outside it is winter: everything is under a clean blanket of snow — snow on the ground, capping
+the raised beds, along the top of the wooden fence, on the neighbouring rooftop and on the
+branches of the trees. The potted citrus trees are gone from the patio, overwintered indoors. A
+soft overcast white-blue sky and pale, flat, cool winter light. Snow caps the roof of the bird
+feeder; the feeder itself and the songbird stay exactly where they are.
+
+The fence keeps its exact outline and the rooftop keeps its exact outline, with the snow lying
+on top of them.
+
+Every object stays exactly where it is and keeps its exact shape: the window and all its white
+dividing bars, the curtains, the desk and both monitors, the guitar, the framed poster, the
+shelf, the cabinet, the printer, the plants, the chair, the rover, the rug, and the trees and
+fence outside. Apart from the throw blanket on the chair, and the changes outside the window
+described above, nothing is added, removed, moved or resized — only the light and colour on it
+change.
+
+Same painterly style, same brushwork, same palette relationships. No readable text anywhere.
 ```
 
-## F — Night / winter (edit of B)
+## F — Night / winter (edit of E)
 
-Attach the locked night image B.
+**Attach E, the winter day image — not B.** This used to edit the summer night master and
+change only the view outside the window, which was right while every variant shared one
+interior. It stopped being right when winter's interior gained a throw over the chair: edited
+from B, that blanket would be drawn a second time by a second model pass, and two independent
+draws of the same object do not agree on its folds, its colour or its silhouette. Toggling
+day/night *within* winter would show a different blanket, which is worse than having none.
+
+So winter night is an edit of winter day, the same parenting G uses for autumn. It pays for that
+by doing the full day-to-night relight itself instead of inheriting B's already-dark floor — the
+prompt below is correspondingly longer, and it is longer for a reason rather than by accident.
+One thing makes that relight easier than B's was: E already has the practicals lit, so this
+prompt takes lamps that are on and in the right places and only has to remove the daylight
+around them.
+
+**This is the general rule now that interiors vary by season.** A variant that changes the room
+must be the parent of its own night, because an object may be drawn once or it may be drawn
+consistently, and it cannot be both.
+
+**Christmas was tried outside and has been withdrawn.** The idea read well, and the half of it
+about the room's own bulbs still stands: those are `--room-amber`, the token the lamp and
+monitor spill already use, and recolouring them to multicolour would trade the room's palette
+for a costume that is right for three weeks a year. The outdoor half was warm lights along the
+neighbour's roofline and the fence — what a real street looks like in December, visible only at
+night, colour on surfaces the master already has.
+
+What it ignored is that the room **already has a string of bulbs**, hung indoors along the top
+of the window. The two strings land a few pixels apart on the master with four metres of glass
+between them, and SHARP has to separate them from a single view. It does not: the reconstruction
+mixes them, putting some indoor bulbs out in the yard and some of the yard's onto the window
+frame. Per-variant geometry does not rescue it, because the depth is wrong *inside* the
+reconstruction rather than lost in transfer to another cloud.
+
+**So the yard gets no point lights.** Snow, sky, a lit feeder — things that are either large or
+unambiguous in depth. If Christmas is wanted outside later, the shape that could work is light
+*on* a surface with no lamp to localise: a warm wash across the neighbour's wall, never a row of
+individual bulbs hanging in air a few pixels from a window mullion.
+
+An indoor tree was declined separately and for an unrelated reason — the calendar, not the
+reconstruction. See E.
 
 ```text
-Edit this image. Change ONLY the view outside the window — every element inside the room,
-the window frame, the curtains, the indoor lighting and the camera angle stay PERFECTLY
-identical.
+Edit this image to night. Keep the composition, camera angle, furniture, objects and their exact
+positions PERFECTLY identical — change only the light. Do not crop, zoom, straighten, resize or
+re-frame, and output at exactly the same pixel size as the input.
 
-Outside it is a winter night: snow covers the ground, the raised beds, the fence top, the
-neighboring rooftop and the bare branches of the leafless fruit tree, glowing faintly
-blue in the darkness. The potted citrus trees are gone from the patio. A cold, clear,
-deep blue night sky. Snow caps the roof of the bird feeder; the warm glowing ring around
-its camera lens still lights the seed tray, and its glow catches the falling edge of the
-snow. The feeder and the songbird stay exactly where they are.
+The daylight is gone, so start with the floor — it is the largest change in the picture. The
+wooden boards and the rug are now among the darkest surfaces in the frame: deep shadowed brown,
+evenly dark from the window all the way to the desk, the grain only just readable. The flat cool
+overcast light that lay across them is gone completely. Three soft pools of light rest on that
+dark floor and nothing else does — a warm amber ellipse at the foot of the floor lamp on the
+left, a smaller one beneath the desk, and a faint cool spill on the boards in front of the
+monitors. Every other part of the floor is one continuous unlit surface.
+
+The room is lit entirely by its own warm practical lights, which are already switched on in this
+image and stay exactly where they are: the floor lamp on the left, the desk lamp over the desk,
+and both strands of string lights — the one along the top of the window and down its casing, and
+the one along the wooden shelf on the right wall — every small bulb a warm amber point. Both
+monitors add their cool blue spill across the desk and the wall behind them. The brightest shapes
+anywhere in the picture are the lamp shades, the string-light bulbs, the monitor panels and the
+small indicator lights.
+
+The knitted throw over the back of the chair stays exactly where it is and keeps its exact folds
+and colour. It is now lit only by the lamps: warm where it faces the desk lamp, falling into
+shadow on the side away from it.
+
+Outside it is a winter night. The snow stays exactly where it lies — on the ground, the raised
+beds, the top of the fence, the neighbouring rooftop and the branches of the trees — but it is no
+longer daylit. It reads as a soft dark blue-white, faintly luminous against a cold, clear, deep
+blue night sky. The snow nearest the house catches the warm light spilling out of the window and
+glows amber against the blue. The potted citrus trees are still gone from the patio. The fence
+and the rooftop keep their exact outlines, with the snow lying on top of them.
+
+The bird feeder and the songbird stay exactly where they are, snow still capping the feeder's
+roof. The feeder's camera lens stays the small dark dot it is in the day image. The seed tray
+directly below the lens catches a small warm pool of light that lies flat on the tray's own
+surface and fades out before it reaches the feeder's walls.
+
+There are no string lights, lanterns, fairy lights or other small lamps anywhere outside. The
+only light in the yard is what spills through the window from indoors, plus the small pool on
+the feeder's seed tray.
+
+The glass prism on the cabinet top stays exactly where it is but is now unlit — dark glass
+catching a little lamplight, with no spectrum, no rainbow and no glow of its own.
+
+Every object stays exactly where it is and keeps its exact shape: the window and all its white
+dividing bars, the curtains, the desk and both monitors, the guitar, the framed poster, the
+shelf, the cabinet, the printer, the plants, the chair and the throw over it, the rover, the rug,
+and the trees and fence outside. Nothing is added, removed, moved or resized — only the light and
+colour on it change.
+
+Same painterly style, same brushwork, same palette relationships. No readable text anywhere.
+```
+
+
+## G — Night / autumn (edit of D)
+
+**Parented on the fall day master, not on B.** B is night-summer edited from A; this is the same
+move one column over, so it inherits the fall tree instead of re-deriving it. That mattered less
+when the fallback was only a colour compromise — `variantFor` in `src/data/scene.ts` currently
+sends fall+night to summer's `night` raster — and it matters now, because that fallback also
+hands a fall visitor summer's *geometry*: the green canopy, not the gold one.
+
+**What actually survives darkness**, which was the original argument against this image existing
+at all. A gold canopy at night is a dark canopy; the hue the season is named for is the one
+thing a window cannot deliver after dusk. Two things do carry it. The canopy reads warm-brown
+rather than cool-green in silhouette against a blue sky — a small difference, but a real one at
+this size. And **fallen leaves on the ground**, catching the warm spill from the window, are
+unmistakable, near the camera, and painted on a surface the master already has. The second is
+doing most of the work; the prompt weights it accordingly.
+
+**No point lights outside** — F's finding applies here for the same reason, and the indoor
+string along the window stays lit exactly as it is in B.
+
+```text
+Edit this image to night. Keep the composition, camera angle, furniture, objects and their exact
+positions PERFECTLY identical — change only the light. Do not crop, zoom, straighten, resize or
+re-frame, and output at exactly the same pixel size as the input.
+
+The sun has set, so start with the floor — it is the largest change in the picture. The wooden
+boards and the rug are now among the darkest surfaces in the frame: deep shadowed brown, evenly
+dark from the window all the way to the desk, the grain only just readable. Three soft pools of
+light rest on that dark floor and nothing else does — a warm amber ellipse at the foot of the
+floor lamp on the left, a smaller one beneath the desk, and a faint cool spill on the boards in
+front of the monitors. Every other part of the floor is one continuous unlit surface.
+
+The room is lit entirely by its own warm practical lights. The floor lamp on the left glows, the
+desk lamp glows over the desk, and both strands of string lights are lit — the one along the top
+of the window and down its casing, and the one along the wooden shelf on the right wall — every
+small bulb a warm amber point. Both monitors add their cool blue spill across the desk and the
+wall behind them. The brightest shapes anywhere in the picture are the lamp shades, the
+string-light bulbs, the monitor panels and the small indicator lights.
+
+Outside the window it is an autumn night under a deep blue sky. The tree keeps its exact shape,
+size and position and its leaves stay on it; in the darkness the canopy reads as a warm dark
+brown-amber mass against the blue, neither green nor black. Fallen leaves lie scattered across
+the ground beneath it and along the patio, and the ones nearest the house catch the warm light
+spilling out of the window, glowing amber-brown against the dark ground. The fence and the
+neighbouring rooftop keep their exact outlines.
+
+The bird feeder and the songbird stay exactly where they are. The feeder's camera lens stays
+the small dark dot it is in the day image. The seed tray directly below the lens catches a small
+warm pool of light that lies flat on the tray's own surface and fades out before it reaches the
+feeder's walls.
+
+There are no string lights, lanterns or other small lamps anywhere outside. The only light in
+the yard is what spills through the window from indoors, plus the small pool on the feeder's
+seed tray. There is no snow; it is not winter.
+
+The glass prism on the cabinet top stays exactly where it is but is now unlit — dark glass
+catching a little lamplight, with no spectrum, no rainbow and no glow of its own.
+
+Every object stays exactly where it is and keeps its exact shape: the window and all its white
+dividing bars, the curtains, the desk and both monitors, the guitar, the framed poster, the
+shelf, the cabinet, the printer, the plants, the chair, the rover, the rug, and the tree and
+fence outside. Nothing is added, removed, moved or resized — only the light and colour on it
+change.
+
+Same painterly style, same brushwork, same palette relationships. No readable text anywhere.
 ```
 
 ---

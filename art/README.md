@@ -10,8 +10,9 @@ objects.json           what hides what, plus normalised SAM prompts and depth op
 masks-manual/          masks SAM could not win — generated or painted, then committed.
 fills/                 hand-made plates for holes LaMa cannot fill. Often absent.
 room-night-summer.jpg  the night master. A pixel-registered EDIT of the day master.
-room-day-summer.ply    GITIGNORED. SHARP's reconstruction of the day master; see below.
-room-night-summer.ply  GITIGNORED. SHARP's reconstruction of the NIGHT master; see below.
+room-day-fall.jpg      fall. Also an edit of the day master.
+room-day-winter.jpg    winter, and room-night-winter.jpg its night.
+*.ply                  GITIGNORED. SHARP's reconstruction of each master; see below.
 build/                 GITIGNORED. Everything the tools derive from the above.
 ```
 
@@ -22,18 +23,31 @@ in `build/`, and then "is this worth committing?" never has to be answered again
 
 ## The `.ply` files, and why they are not committed
 
-There are **two**, one per lighting state, and both are required to run the bake:
+There are **six**, one per master, and all six are required to run the bake:
 
 ```
-room-day-summer.ply     geometry AND day colour. Everything but the variant rasters.
-room-night-summer.ply   night colour only — its f_dc, onto the day build's splats.
+room-day-summer.ply     the base cloud: geometry and day colour, and the quantisation
+                        range every other reconstruction is baked against.
+room-night-summer.ply   night: its own colour and its own geometry.
+room-day-fall.ply       fall. Likewise.
+room-day-winter.ply     winter. Likewise.
+room-night-winter.ply   winter-night. Likewise.
+room-night-fall.ply     fall-night. Likewise.
 ```
 
 Each is Apple SHARP's Gaussian reconstruction of the matching master, 63MB, and together
-they are the input to `tools/sharp_splat_bake.py`, which writes the five rasters the site
-actually loads into `public/art/`. **Those are committed; the PLYs are not.** They are tool
-outputs rather than authored inputs, and 126MB in history would be paid for on every clone
-and every CI checkout of a repo that deploys to GitHub Pages.
+they are the input to `tools/sharp_splat_bake.py`, which writes the rasters the site actually
+loads into `public/art/`. **Those are committed; the PLYs are not.** They are tool outputs
+rather than authored inputs, and 378MB in history would be paid for on every clone and every
+CI checkout of a repo that deploys to GitHub Pages.
+
+**A variant contributes four tables, not one.** It used to be `f_dc` alone, dropped onto the
+day build's splats — cheaper, and it kept every authored number valid. Winter ended that for
+seasons: a variant master may relight any surface but may not *move* one, and winter's yard is
+bare branches against distant snow where summer's is leafy canopy near the glass, and winter
+now moves something indoors as well — a throw over the chair, which is legal because it misses
+every rect in `src/data/hotspots.ts`, `controls.ts` and `ambient.ts`. Only one season is ever
+downloaded, so the load is unchanged; the repo carries all six.
 
 **A variant is a reconstruction, never an image.** Inferring a variant's colours from a
 photograph of it was built, shipped and removed; the reasoning is in
