@@ -100,7 +100,7 @@ export interface SplatRendererOptions {
    * landed (they are one `Promise.all`), so without this the room is a blank rectangle for
    * as long as that takes. Never called if the server omits `Content-Length`.
    */
-  onProgress?: (fraction: number) => void;
+  onProgress?: (fraction: number, loaded: number, total: number) => void;
   /**
    * Quad half-extent in standard deviations. 2 is the usual choice: beyond it the Gaussian
    * is under 1.4% of its peak and the extra fragments are shaded for nothing.
@@ -670,8 +670,15 @@ export async function createSplatRenderer(
   );
 
   let seen = 0;
+  // `loaded` and `total` ride along beside the fraction so the caller can show the real
+  // figure. A loading screen that says "4.1 / 11.2 MB" is telling the visitor something true
+  // about why they are waiting; one that says "58%" is telling them the same thing with the
+  // interesting part removed.
   const onBytes = total && opts.onProgress
-    ? (n: number) => { seen += n; opts.onProgress!(Math.min(1, seen / total)); }
+    ? (n: number) => {
+        seen += n;
+        opts.onProgress!(Math.min(1, seen / total), Math.min(seen, total), total);
+      }
     : undefined;
 
   const [geomRaster, colorRaster, shapeRaster, quatRaster, variantRaster] =
@@ -681,7 +688,7 @@ export async function createSplatRenderer(
   // Decoding and upload still take a beat after the last byte lands, so this is the bar
   // reaching full, not the room being drawable. The caller's own completion is what says
   // the room can be shown.
-  opts.onProgress?.(1);
+  opts.onProgress?.(1, total, total);
 
   const program = gl.createProgram()!;
   gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERT));

@@ -78,6 +78,18 @@ export interface AmbientEffect {
    * previews each destination's colour, which is a bonus rather than the reason.
    */
   accent?: string;
+  /**
+   * Whether this light also carries a *content change* — a second, paler light over the same
+   * rect that is dark almost all the time and briefly brightens (room.css, `pane-content`).
+   *
+   * Only a screen has one, and that is the point rather than a coincidence. An indicator on a
+   * machine says *on*; a screen says *on, and showing something*, and the second half of that
+   * is the only thing a still painting genuinely cannot do. It is a flag here rather than a
+   * kind of its own because it changes nothing about how the effect is placed or blended — the
+   * colour, the reach and the cadence are all in the stylesheet with the rest of that
+   * reasoning, the same way `--bloom` is.
+   */
+  redraw?: boolean;
 }
 
 /**
@@ -227,5 +239,18 @@ export const AMBIENT: readonly AmbientEffect[] = [
     // 4.51m. A flat frontal panel is the easiest thing in the room to get a depth reading on.
     distanceM: 4.67,
     accent: 'var(--accent-flowlab)',
+    /**
+     * **This is the monitor's actual affordance, and the drift alone was not one.** A panel's
+     * total light output is almost steady, so the wobble that says "on" is by construction too
+     * slow for peripheral vision to catch — which is exactly what got reported: of the three
+     * tells the monitor was the hardest to tell was clickable, and it is the room's primary
+     * hotspot.
+     *
+     * A screen's content changing is the one event available here that no other object in the
+     * room could produce, and it is the reason this is a flag on the screen rather than a
+     * brighter number on the drift. See `pane-content` in room.css for the curve, the colour
+     * and why the interval is deliberately irregular.
+     */
+    redraw: true,
   },
 ];

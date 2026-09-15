@@ -143,6 +143,34 @@ const INTRO_HOLD_MS = 2000;
 /** How long the card takes to leave. Must match `.room__intro`'s transition in room.css. */
 const INTRO_FADE_MS = 450;
 
+/**
+ * How long the room may go without receiving a single byte before it says so.
+ *
+ * **Measured against silence, not against elapsed time**, and the difference is the whole
+ * point. A load that takes twenty seconds on a thin connection is working correctly and
+ * needs no apology; a load that has received nothing for six seconds is a different event,
+ * and it is the only one a visitor cannot distinguish from a broken page by looking at it.
+ * A deadline on total duration would fire on the first case, which is the common one, and
+ * teach the visitor to ignore it before the second one ever happened.
+ *
+ * Six seconds because the bar's own transition is 220ms and a healthy chunked download
+ * refreshes it many times a second, so a gap this long is not jitter under any network
+ * this runs on. It is checked by polling a ref rather than by a state write per chunk —
+ * `onProgress` fires dozens of times per load and must stay off React's path.
+ */
+const STALL_MS = 6000;
+
+/**
+ * How many Gaussians the room is made of: the bake's 768x768 grid times its two layers.
+ *
+ * Stated here rather than read from the manifest because the loading screen has to say it
+ * *before* the manifest arrives — and because it is a property of the bake's shape, which
+ * lives in docs/SCENE-SPLAT.md, not a number that drifts per run. If the grid or the layer
+ * count ever changes, `art/build/room-day-summer-splat.json`'s `count` is the check.
+ */
+const SPLAT_COUNT = 768 * 768 * 2;
+
+
 type Phase = "idle" | "entering" | "live" | "leaving";
 
 export default function Room() {
@@ -160,6 +188,36 @@ export default function Room() {
    * millisecond of it. The poster covers that window.
    */
   const [drawable, setDrawable] = useState(false);
+  /**
+   * When the last byte of the room arrived, for `STALL_MS`. Written from `onProgress` — a
+   * ref, not state, because that callback fires once per network chunk and its entire
+   * contract is that it costs no renders.
+   *
+   * Seeded at mount rather than at the first chunk, so a load that never starts — a hung
+   * manifest fetch, a captive portal swallowing the request — is covered by the same timer
+   * as one that starts and dies. Those look identical to a visitor and should say the same
+   * thing.
+   */
+  const lastByteRef = useRef(0);
+  /** Whether the room has gone `STALL_MS` without a byte, and has said so. */
+  const [stalled, setStalled] = useState(false);
+  /**
+   * The megabyte readout, written into directly from the fetch callback.
+   *
+   * A ref to the node rather than state holding the text, for the same reason `--load` is a
+   * custom property: this changes once per network chunk — dozens of times across a load —
+   * and re-rendering the room's whole tree to retype four characters would be absurd.
+   */
+  const bytesRef = useRef<HTMLParagraphElement>(null);
+  /**
+   * Whether every byte has landed and the work left is decode and upload.
+   *
+   * A single state flip, not a continuum, which is why this one is allowed to be state: it
+   * happens exactly once per load. It is also the most interesting thing the loading screen
+   * gets to say, because it is the moment the download stops being the bottleneck and a
+   * million Gaussians are actually being unpacked.
+   */
+  const [decoding, setDecoding] = useState(false);
   const [aspect, setAspect] = useState(ART_ASPECT);
   const [view, setView] = useState({ w: 0, h: 0 });
   const [focus, setFocus] = useState<Hotspot | null>(null);
@@ -304,6 +362,9 @@ export default function Room() {
     // Read here, inside the effect, rather than during render: this is an island, so its
     // initial HTML is produced at build time, and `current()` reads the *visitor's* clock.
     // Resolved at render it would bake the build machine's timezone into the page.
+    // The stall clock starts at mount, not at the first chunk — see `lastByteRef`.
+    lastByteRef.current = performance.now();
+
     const initialDaylight = currentDaylight();
     const initialSeason = currentSeason();
     setDaylight(initialDaylight);
@@ -331,7 +392,20 @@ export default function Room() {
             // Straight onto the element as a custom property, not through React state. This
             // fires once per network chunk — dozens of times over a few seconds — and all it
             // ever does is set the width of one bar.
-            onProgress: (f) => root.style.setProperty("--load", f.toFixed(3)),
+            onProgress: (f, loaded, total) => {
+              root.style.setProperty("--load", f.toFixed(3));
+              // A timestamp beside the bar's width. Both are O(1) writes outside React —
+              // the stall is detected by polling this below, not by setting state here.
+              lastByteRef.current = performance.now();
+              // Straight into the node. One decimal place: the figure is there to explain
+              // the size of the wait, and a second decimal changes too fast to read.
+              const mb = (n: number) => (n / 1048576).toFixed(1);
+              if (bytesRef.current) {
+                bytesRef.current.textContent = `${mb(loaded)} / ${mb(total)} MB`;
+              }
+              // The one flip worth a render, and only ever once.
+              if (f >= 1) setDecoding(true);
+            },
           })
         : createRoomRenderer({
             canvas,
@@ -665,6 +739,26 @@ export default function Room() {
     return () => clearTimeout(t);
   }, [drawable, webgl, reduced]);
 
+  /**
+   * The stall watch. Runs only while there is genuinely something to wait for, and stops
+   * the moment the room is drawable — so on a warm cache it never starts a timer at all.
+   *
+   * Polling at a second, rather than a timer armed and re-armed from `onProgress`: the
+   * callback stays free of scheduling work, and a poll that finds nothing costs one
+   * subtraction. It clears itself as well as setting itself, so a connection that comes
+   * back takes the line away again without needing a second mechanism.
+   */
+  useEffect(() => {
+    if (drawable || !webgl) {
+      setStalled(false);
+      return;
+    }
+    const id = window.setInterval(() => {
+      setStalled(performance.now() - lastByteRef.current > STALL_MS);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [drawable, webgl]);
+
   // Any deliberate input takes it down early — a visitor who has started doing something
   // has, by definition, stopped needing to be told what to do. Pointer *movement* is
   // excluded on purpose: the room reacts to the cursor at rest (parallax), so a mouse that
@@ -830,7 +924,76 @@ export default function Room() {
           light, not chrome — so this is a line of light along the floor of the frame rather
           than a spinner, and it is driven by real bytes (`--load`), never by a timeline
           guessing at how long a network takes. */}
-      {!drawable && webgl && <div className="room__load" aria-hidden="true" />}
+      {!drawable && webgl && (
+        <div className="room__load" aria-hidden="true">
+          {/* **The wait is the one moment this site has the visitor's full attention and
+             * nothing to show them, so it tells them what is actually arriving.** The room is
+             * 1,179,648 Gaussians regressed from a single photograph, which is genuinely
+             * interesting and is the reason the download is large — and a wait you understand
+             * is a different experience from the same wait spent watching a spinner. The
+             * figures are real: the count is the bake's own (768x768 grid, two layers), and
+             * the megabytes come from `Content-Length`, not from a guess.
+             *
+             * Two moving parts, alive from the first frame and neither dependent on `--load`
+             * to be visible:
+             *
+             *   the arc    fills with the bytes
+             *   the sheen  turns on its own clock, so a stalled connection still has
+             *              something on screen saying the page has not died
+             *
+             * Drawn, not fetched. The objection to a GIF here was never animation — it was
+             * megabytes of looping raster competing with the 11.2MB it would be covering, on
+             * exactly the connection that made it necessary. */}
+          <div className="room__load-dial">
+            <span className="room__load-arc" />
+            <span className="room__load-sheen" />
+          </div>
+
+          <div className="room__load-say">
+            {/* Three phases, each fading in over its own slice of the download. Pure CSS
+                against `--load` (room.css) rather than React state, because this element has
+                to change dozens of times over a load and none of those may cost a render.
+                The last one is a state flip instead — `decoding` is a single transition, not
+                a continuum, and it is the one phase that is not about bytes at all. */}
+            {decoding ? (
+              <p className="room__load-phase room__load-phase--now">
+                Decoding {SPLAT_COUNT.toLocaleString("en-US")} splats
+              </p>
+            ) : (
+              <>
+                {/* **The first slice starts below zero so this line is lit on the first
+                    frame.** It carries the interesting fact rather than saving it for later:
+                    on the slow connection this screen exists for, the opening phase is the
+                    one a visitor spends the longest looking at, and "Fetching the room" is
+                    not worth ten seconds of anyone's attention. */}
+                <p className="room__load-phase" style={{ "--from": -0.05, "--to": 0.34 } as React.CSSProperties}>
+                  Downloading the room &mdash; {SPLAT_COUNT.toLocaleString("en-US")} Gaussian
+                  splats
+                </p>
+                <p className="room__load-phase" style={{ "--from": 0.34, "--to": 0.72 } as React.CSSProperties}>
+                  All reconstructed from a single photograph
+                </p>
+                <p className="room__load-phase" style={{ "--from": 0.72, "--to": 1.05 } as React.CSSProperties}>
+                  Unpacking depth and light
+                </p>
+              </>
+            )}
+            {/* Written straight into the node from the fetch callback, never through state —
+                same rule as `--load` itself.
+ 
+                **React renders nothing inside it, and the placeholder is in the stylesheet
+                (`:empty::before`).** `Content-Length` is not known until the four responses'
+                headers land — seconds in on a slow connection — so this must not be blank
+                until then, which is the same mistake as a phase that ramps up from zero. But
+                giving React a child here would mean two owners for one text node: React
+                reconciling it and the callback overwriting it. That works only for as long as
+                the literal never changes, which is not a property worth depending on. CSS
+                fills the empty state, the callback fills the real one, and neither can erase
+                the other. */}
+            <p className="room__load-bytes" ref={bytesRef} />
+          </div>
+        </div>
+      )}
 
       {/*
         The title card. **`aria-hidden`, and that is not an oversight** — every word here is
@@ -850,6 +1013,25 @@ export default function Room() {
           <p className="room__intro-line">
             Click the objects in the room &mdash; each one goes somewhere.
           </p>
+          {/* Only when the room has actually gone quiet — see `STALL_MS`. It says what is
+              happening rather than apologising for it: a visitor looking at a warm
+              rectangle cannot tell a thin connection from a dead page, and this is the one
+              fact that separates them. It lives in the card because the card has already
+              solved legibility over a ground that is paper by day and plum at night, and
+              because the card is the room's voice during the wait.
+
+              **It inherits the card's `aria-hidden`, and that is the right answer rather
+              than an omission carried over.** It is the one line here that is not also in
+              the document below, so the question is real — but a screen reader is reading
+              that document, which is server-rendered and complete, and nothing it conveys
+              is waiting on these 11MB. There is no wait to announce. A live region firing
+              "still loading" into the middle of the prose would interrupt a visitor to
+              describe a delay they are not experiencing. */}
+          {stalled && (
+            <p className="room__intro-line room__intro-wait">
+              Still loading &mdash; the room is a 3D scene, and this connection is slow.
+            </p>
+          )}
         </div>
       )}
 

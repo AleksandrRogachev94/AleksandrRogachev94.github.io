@@ -1,0 +1,149 @@
+---
+// Development harness for the loading state. Not linked from anywhere and not part of the
+// site.
+//
+// **Why this exists.** The loading state is on screen for the few hundred milliseconds
+// between mount and `drawable`, and on localhost that is too fast to look at. Seeing it at
+// all meant throttling the network and reloading, and seeing it at a *particular* fraction
+// meant catching a reload at the right instant — which is not a thing anyone can do. Several
+// versions of this screen were therefore judged entirely on how they looked at `--load: 0`,
+// which is the one value at which a loader has the least to show.
+//
+// So: the real markup, the real stylesheet, and a slider for the one variable. `--load` is a
+// custom property written onto `.room` from the fetch (Room.tsx), so nothing here has to
+// simulate anything — the same declarations the site ships are resolving against the same
+// variable, and what is on screen is what a visitor at that fraction sees.
+//
+// `is:inline` on the script so nothing here is bundled or rewritten. The stylesheet is
+// imported normally, because the whole point is that it is the shipped one.
+import '../../styles/tokens.css';
+import '../../styles/room.css';
+---
+
+<!doctype html>
+<meta charset="utf-8">
+<title>load state — dev</title>
+<meta name="robots" content="noindex">
+<style is:inline>
+  body { margin: 0; }
+  /* The room's own ground and letterbox behaviour, the way index.astro gets them. */
+  #hud {
+    position: fixed; left: 12px; top: 12px; z-index: 10;
+    background: #000c; color: #ddd; padding: 10px 12px; border-radius: 6px;
+    font: 12px ui-monospace, Menlo, monospace; line-height: 1.8;
+    backdrop-filter: blur(6px);
+  }
+  #hud input[type=range] { width: 220px; vertical-align: middle; }
+  #hud button { font: inherit; background: #333; color: #ddd; border: 1px solid #555;
+                border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  /* The page below the fold, so the loader can be judged against what it sits above —
+     the dark-band mistake was only obvious with the document's warm paper in frame. */
+  #below { height: 40vh; background: var(--page-bg, #f2e9dc); }
+</style>
+
+<div class="room" id="room">
+  <div class="room__load" aria-hidden="true">
+    <div class="room__load-dial">
+      <span class="room__load-arc"></span>
+      <span class="room__load-sheen"></span>
+    </div>
+    <div class="room__load-say">
+      <p class="room__load-phase" style="--from:-0.05;--to:0.34">Downloading the room &mdash; 1,179,648 Gaussian splats</p>
+      <p class="room__load-phase" style="--from:0.34;--to:0.72">All reconstructed from a single photograph</p>
+      <p class="room__load-phase" style="--from:0.72;--to:1.05">Unpacking depth and light</p>
+      <p class="room__load-phase room__load-phase--now" id="decode" hidden>Decoding 1,179,648 splats</p>
+      <p class="room__load-bytes" id="bytes"></p>
+    </div>
+  </div>
+  <div class="room__intro" id="intro" aria-hidden="true">
+    <p class="room__intro-name">Alex Rogachev</p>
+    <p class="room__intro-line">Click the objects in the room &mdash; each one goes somewhere.</p>
+    <p class="room__intro-line room__intro-wait" id="wait" hidden>
+      Still loading &mdash; the room is a 3D scene, and this connection is slow.
+    </p>
+  </div>
+</div>
+<div id="below"></div>
+
+<div id="hud">
+  <div>
+    --load <input type="range" id="load" min="0" max="1" step="0.001" value="0">
+    <span id="val">0.000</span>
+  </div>
+  <div>
+    <button id="play">play 18s</button>
+    <button id="stall">toggle stall line</button>
+  </div>
+  <div>
+    season/time
+    <button data-set="">day summer</button>
+    <button data-set="night">night</button>
+    <button data-set="winter">winter</button>
+  </div>
+</div>
+
+<script is:inline>
+  const room = document.getElementById('room');
+  const slider = document.getElementById('load');
+  const val = document.getElementById('val');
+  const wait = document.getElementById('wait');
+
+  const bytes = document.getElementById('bytes');
+  const decode = document.getElementById('decode');
+  const phases = [...document.querySelectorAll('.room__load-phase:not(.room__load-phase--now)')];
+  // 11.2MB is the real figure for one cloud: colour 2.4 + geom 2.7 + quat 3.1 + shape 2.9.
+  const TOTAL = 11.2;
+
+  const set = (f) => {
+    room.style.setProperty('--load', f.toFixed(3));
+    val.textContent = f.toFixed(3);
+    slider.value = f;
+    // The real page only knows the total once the four responses' headers land, so at a
+    // literal zero it is still showing its shipped placeholder. Mirrored here, because
+    // "what does this look like before any byte has arrived" is the question this page
+    // exists to answer and the one every version of this screen has failed.
+    // Left empty below the first byte so `:empty::before` shows the shipped placeholder —
+    // the real page is in exactly that state until the four responses' headers land, and
+    // "what does this look like before anything has arrived" is the question this page exists
+    // to answer.
+    bytes.textContent = f > 0
+      ? (f * TOTAL).toFixed(1) + ' / ' + TOTAL.toFixed(1) + ' MB'
+      : '';
+    // The real page swaps the three ramped phases for the decode line the moment the last
+    // byte lands; mirror that here so the handover can be judged, not just the ramps.
+    const done = f >= 1;
+    decode.hidden = !done;
+    for (const p of phases) p.style.display = done ? 'none' : '';
+  };
+  set(0);
+  slider.addEventListener('input', () => set(Number(slider.value)));
+
+  // An 18s ramp, which is roughly what 11.2MB costs on Slow 4G — the case this screen is
+  // for. Linear, because a real download is not, and anything eased here would be a second
+  // guess layered on the first.
+  let raf = 0;
+  document.getElementById('play').addEventListener('click', () => {
+    cancelAnimationFrame(raf);
+    const t0 = performance.now();
+    const step = (t) => {
+      const f = Math.min(1, (t - t0) / 18000);
+      set(f);
+      if (f < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+  });
+
+  document.getElementById('stall').addEventListener('click', () => {
+    wait.hidden = !wait.hidden;
+  });
+
+  // The mat follows the visitor's clock and calendar on the real page; here it is a button,
+  // because the loader has to hold up on all three grounds (warm paper, plum, cool grey).
+  for (const b of document.querySelectorAll('[data-set]')) {
+    b.addEventListener('click', () => {
+      const v = b.dataset.set;
+      room.dataset.daylight = v === 'night' ? 'night' : 'day';
+      room.dataset.season = v === 'winter' ? 'winter' : 'summer';
+    });
+  }
+</script>

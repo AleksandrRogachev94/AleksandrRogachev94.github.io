@@ -33,6 +33,17 @@
 
 /* ---- the room ----------------------------------------------------------- */
 
+/* Gives `--load` a type, which is what lets it be transitioned — see the `transition` in
+ * `.room` below. Without a registration a custom property is an untyped token and animating
+ * it is not defined; with one it interpolates as a number and everything derived from it
+ * moves together. A browser that does not support `@property` simply steps instead, which is
+ * the behaviour this replaced and is not a failure. */
+@property --load {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
+}
+
 .room {
   position: relative;
   width: 100%;
@@ -49,9 +60,23 @@
   /* Written every frame by the rig: 0 at rest, 1 fully pushed in. The only channel
    * between the camera and the DOM, so the push costs no React renders. */
   --push: 0;
-  /* Fraction of the room's bytes that have arrived. Written from the fetch, not the rig,
-   * and only while the poster is up. */
+  /* Fraction of the room's bytes that have arrived, 0..1. Written from the fetch (Room.tsx),
+   * not the rig, and only while the loading state is mounted — which is until the renderer
+   * can draw, not until the last byte lands. Everything in the load reads it; `/dev/load`
+   * exists to scrub it. */
   --load: 0;
+  /* **Smoothed once, here, rather than per element.** Chunks land unevenly, so a value
+   * stepped straight onto the DOM makes every reader of it jump together.
+   *
+   * It has to be smoothed at the source because the things reading it are not all animatable:
+   * the arc is a `conic-gradient` angle, and gradients do not interpolate — a
+   * `transition: background` on it is silently inert, which is what it was doing before.
+   * Transitioning the *variable* works for all of them at once, including that one, and the
+   * `@property` registration above is what makes it possible: an unregistered custom property
+   * is an untyped token to the cascade and can only ever jump.
+   *
+   * Short enough that a stalled network still reads as stalled. */
+  transition: --load 220ms ease-out;
   /* The veil's progress, 0..1, written every frame by the rig alongside `--push`. Declared
    * here so the stylesheet reads on its own and so the room is unveiled if the island never
    * hydrates. What schedule maps `--push` to this is the destination's business, not the
@@ -241,10 +266,167 @@ canvas.room__canvas {
 }
 
 
-/* A line of light along the floor of the frame. Not a spinner: a spinner says "an
- * application is busy", and this is a room turning on. It is wordless on purpose — the
- * document below is already there and already readable, so nothing here is blocking. */
+/* ---- the load -------------------------------------------------------------
+ *
+ * The room needs ~11.2MB before it can draw a single frame — colour 2.4, geom 2.7, quat 3.1,
+ * shape 2.9, all four in one `Promise.all` — so on a thin connection this is on screen for
+ * fifteen to twenty seconds. Four elements, answering three different questions:
+ *
+ *   `.room__load-sheen`  is work happening? Turns on its own clock, from the first frame.
+ *   `.room__load-arc`    how far along? The byte fraction, as an angle.
+ *   `.room__load::after` the same fraction along the floor of the frame.
+ *   `.room__load-say`    what is arriving, in words and in megabytes.
+ *
+ * **Alive at 0%.** Three earlier versions drew their whole state from `--load` and were
+ * therefore blank for the first second of every load — exactly when a visitor decides whether
+ * the page is broken. Progress may make a loader richer; it must never be what makes it
+ * visible.
+ *
+ * **On the room's own ground, not a darkened one.** A veil of `--room-shade` over `--mat` was
+ * tried and removed: it computes to rgb(61,51,42), which is mud, and it put a dark band above
+ * the warm paper of the document that is already visible below the fold. The room's ground is
+ * the site's ground; the loader is dark-on-light against it, the way the document is. */
+
 .room__load {
+  position: absolute;
+  inset: 0;
+  /* Over the canvas that is about to fade up, and decoration. */
+  pointer-events: none;
+}
+
+/* The dial: an arc that fills with the bytes, and a sheen that turns regardless.
+ *
+ * **Two moving parts because there are two different truths to tell.** The arc is progress
+ * and must never move unless bytes moved. The sheen is liveness and must never stop, because
+ * a stalled connection is exactly when a visitor most needs something on screen saying the
+ * page has not died — and an arc that has genuinely stopped cannot say that without lying.
+ * One element doing both would have to compromise one of them. */
+.room__load-dial {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 58px;
+  margin: -78px 0 0 -29px;
+}
+
+/* The fill. A conic gradient masked into a ring — no SVG, no second element per segment, and
+ * the whole thing is one paint whose angle is read straight off `--load`. */
+.room__load-arc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--room-amber) calc(var(--load, 0) * 360deg),
+    color-mix(in srgb, var(--room-ink) 11%, transparent) 0
+  );
+  /* Punches the middle out. `farthest-side` puts 100% at the radius, so the opaque band is
+   * the outer 3px and the ring's width is stated once, here, in real pixels. */
+  -webkit-mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 0);
+  mask: radial-gradient(farthest-side, #0000 calc(100% - 3px), #000 0);
+  /* No transition here. A gradient is not interpolable, so one would be inert — the easing
+   * that makes this follow the bytes smoothly is on `--load` itself, in `.room`. */
+}
+
+/* The sheen: a single lit arc travelling around the ring, on its own clock. Ink rather than
+ * amber so it reads against the arc it crosses instead of merging into it. */
+.room__load-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  border-top-color: color-mix(in srgb, var(--room-ink) 38%, transparent);
+  animation: room-load-spin 1.15s linear infinite;
+}
+
+@keyframes room-load-spin {
+  to { rotate: 360deg; }
+}
+
+/* What is arriving, in words. Centred under the dial.
+ *
+ * Warm ink on the room's own ground — not the near-black-and-mono of a focus state (rule 4).
+ * A status strip in that language would promise a destination that is not coming; this is the
+ * room's own voice, and the room is warm. */
+.room__load-say {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% 0;
+  margin-top: -4px;
+  width: min(30ch, 78vw);
+  text-align: center;
+  /* The phases share one grid cell so the block does not change height as they hand over,
+   * and the figure sits in the row below them. */
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+/* One phase at a time. Each is stacked in the same place and shown across its own slice of
+ * the download, so the line changes as the room arrives without anything moving.
+ *
+ * `--from`/`--to` come from the markup, and the opacity is the lesser of two steep ramps —
+ * one rising at `--from`, one falling at `--to`. `min()` rather than multiplying the two,
+ * because a product of two fractions dips in the middle of a long slice and this must be
+ * flatly on for the whole of it.
+ *
+ * **The ramps are steep (x40, so ~2.5% of the download) and the `transition` does the
+ * smoothing.** A gentle ramp in `--load` space sounds nicer and is not: the download is not
+ * linear, so a slice that ramps over 12% of the bytes can take four seconds or half of one.
+ * Time-based easing belongs in a time-based property, which is what the transition is.
+ *
+ * **The first phase's `--from` is negative, and that is the whole point of it.** At
+ * `--load: 0` a ramp rising *from* 0 evaluates to 0 — so the opening line was invisible for
+ * exactly as long as the connection was slow, which is the case it exists for. Anything here
+ * that must be legible on the first frame has to start its ramp before zero. */
+.room__load-phase {
+  grid-area: 1 / 1;
+  margin: 0;
+  font-size: clamp(0.8125rem, 1.4vw, 0.9375rem);
+  line-height: 1.5;
+  color: var(--room-ink);
+  opacity: min(
+    clamp(0, (var(--load, 0) - var(--from, 0)) * 40, 1),
+    clamp(0, (var(--to, 1) - var(--load, 0)) * 40, 1)
+  );
+  transition: opacity 300ms ease-out;
+}
+
+/* The decode phase is not one of the ramped three — it is a state, and it is simply on. */
+.room__load-phase--now { opacity: 1; }
+
+/* The figure. Tabular so the digits do not jitter as they climb, which on a number updating
+ * several times a second is the difference between a readout and a flicker. */
+.room__load-bytes {
+  grid-area: 2 / 1;
+  margin: 6px 0 0;
+  font-size: clamp(0.6875rem, 1.1vw, 0.75rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--room-ink-soft);
+  /* It must not reserve a line that then jumps when the figure arrives. */
+  min-height: 1.2em;
+}
+
+/* The pre-first-byte state. The real total is unknown until the four responses' headers land,
+ * which on a slow connection is seconds after this is first painted — and it is painted in the
+ * prerendered HTML, before any script has run at all.
+ *
+ * Here rather than as a React child so the node has exactly one owner: Room.tsx writes the
+ * real figure into it with `textContent`, and anything React rendered inside would be a second
+ * writer for the same text node. `:empty` stops matching the moment the callback writes. */
+.room__load-bytes:empty::before {
+  content: 'about 11 MB';
+}
+
+/* The byte count, along the floor of the frame. The one element here that is a true readout,
+ * which is what lets the ring above be honest about saying nothing but "working".
+ *
+ * `--room-amber` *is* right here, against the room's own ground, because this is a thin line
+ * of light rather than a mark: it is small enough that hue carries it where contrast would
+ * not, and it is the colour the room's practicals come up in a moment later. */
+.room__load::after {
+  content: '';
   position: absolute;
   left: 0;
   bottom: 0;
@@ -252,25 +434,15 @@ canvas.room__canvas {
   /* Real bytes. The one thing this must never do is animate on a guessed timeline and then
    * sit at 90% waiting, which is the failure mode of every fake progress bar. */
   width: calc(var(--load, 0) * 100%);
-  /* `--room-amber` is the token for "the practicals: lamp, fairy lights, monitor spill" —
-   * the room's own light sources. Not an `--accent-*`: those belong one-to-one to
-   * destinations and are lit by focus states (tokens.css), and loading is not a
-   * destination. Borrowing one here would quietly make it the site's identity colour,
-   * which PLAN.md rules out. */
   background: linear-gradient(
     90deg,
     color-mix(in srgb, var(--room-amber) 25%, transparent),
     var(--room-amber)
   );
   box-shadow: 0 0 12px 1px color-mix(in srgb, var(--room-amber) 45%, transparent);
-  /* Follows the bytes closely, but not so exactly that a burst of chunks looks like a
-   * stutter. Short enough that a stalled network still reads as stalled. */
-  transition: width 220ms ease-out, opacity 400ms ease;
+  /* Smoothed by `--load`'s own transition in `.room`, not here — so this and the arc cannot
+   * drift out of step with each other while reporting the same number. */
 }
-
-/* The poster is fading; the bar has nothing left to say. Goes first, so the last thing on
- * screen is the room and not a full-width line under it. */
-/* The load bar unmounts with the rest of the loading state; there is nothing to hide. */
 
 /* ---- the title card -------------------------------------------------------
  * Who this is, and what the room is for, over the wait that already exists.
@@ -346,7 +518,32 @@ canvas.room__canvas {
   color: var(--room-ink-over-soft);
 }
 
+/* The stall line. Set apart from the instruction above it and dimmer, because it is a
+ * different kind of sentence — the instruction is what to do, this is what is going on —
+ * and because it must not compete with the name for the eye of someone who is, by
+ * definition, already looking at this corner for longer than intended.
+ *
+ * It fades in on its own: it appears six seconds into a wait, and something that simply
+ * blinks into existence beside two lines that were already there reads as an error. */
+.room__intro-wait {
+  margin-top: 10px;
+  /* Its own size step down, so it is visibly subordinate even where the two lines wrap to
+   * similar widths. */
+  font-size: clamp(0.75rem, 1.2vw, 0.875rem);
+  color: var(--room-ink-over-soft);
+  opacity: 0.82;
+  animation: room-wait-in 500ms ease-out both;
+}
+
+@keyframes room-wait-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 0.82; transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* Straight to its resting state. The line is information and must still arrive; only the
+   * movement goes. */
+  .room__intro-wait { animation: none; }
   /* Room.tsx already collapses both timers to zero here, so the card is never shown at all.
    * This is belt and braces: no transition means nothing can be caught mid-fade. */
   .room__intro { transition: none; }
@@ -587,11 +784,16 @@ canvas.room__canvas {
   /* `--core` is the flat centre before the falloff starts. The rover's indicator is ~31px
    * across at a 1600px viewport, so a gradient that begins decaying at 0% has almost no
    * actual light in it; a panel two hundred times that size needs no flat centre at all. */
+  /* `--glow-c` is the light's own colour and defaults to the object's accent, which is what
+   * every tell but one uses. It exists so a second light over the same rect can be *the same
+   * light, paler* — see `.glow--redraw` — without duplicating the gradient or touching
+   * `--accent`, which the wrapper sets and a dozen other rules read. */
+  --glow-c: var(--accent);
   background: radial-gradient(
     closest-side,
-    var(--accent) 0%,
-    var(--accent) var(--core, 14%),
-    color-mix(in srgb, var(--accent) 52%, transparent) 40%,
+    var(--glow-c) 0%,
+    var(--glow-c) var(--core, 14%),
+    color-mix(in srgb, var(--glow-c) 52%, transparent) 40%,
     transparent 100%
   );
   mix-blend-mode: screen;
@@ -626,16 +828,77 @@ canvas.room__canvas {
   100%    { opacity: 0.10; }
 }
 
-/* The rover: idling, not recording. It breathes, slowly, and shares no common multiple with
- * the feeder's period — two lights on the same cadence read as one animation used twice
- * rather than as two machines that happen to be in the same room. */
+/* The rover: a sweep completing, not a breath.
+ *
+ * **This used to be a symmetric sine — 0.20 to 0.92 and back over 5.2s — and that is why it
+ * did not read as an affordance.** The room has two motion vocabularies and data/ambient.ts
+ * states them: continuous drift belongs to a warm prop (the mug), a discrete electronic event
+ * belongs to a machine you can enter. A sine is continuous, so the rover was speaking the
+ * mug's language while being offered as an example of the other rule. The feeder was the only
+ * tell actually keeping the distinction, which is exactly why the feeder was the only one
+ * anybody noticed.
+ *
+ * **What makes an event findable is its onset rate, not its peak.** Peripheral vision is a
+ * change detector: it fires on onsets and discards slow ramps, so a light can swing through
+ * the same range and be invisible if it takes long enough to get there. The old sine's
+ * steepest passage was ~0.43 opacity/s. This rises at ~3.3/s — against the feeder's ~6.8 —
+ * and the gap is deliberate: same family, different machine. Peak is *lower* than the sine's
+ * was (0.88 vs 0.92). Nothing here is brighter; it is only quicker, and it now spends 80% of
+ * its period at rest, which is what gives it something to be quicker *than*.
+ *
+ * **The shape was wrong on the first attempt and the way it was wrong is worth keeping.** It
+ * was a ~215ms rise, a brief hold, then an 86ms snap off — meant as a scan finishing. Two
+ * things went wrong at once. The drop was a 0.64 swing in 86ms, ~7.4 opacity/s, which made the
+ * *switch-off* the fastest thing in the animation and faster than the feeder's onset; and the
+ * event was long enough (~430ms of rise and hold) that the rise and the fall did not read as
+ * one gesture, so the fall arrived as a second, unexplained event. Reported as jerky, which is
+ * exactly right.
+ *
+ * **A fast loss of light reads as something failing.** That is the same finding `pane-content`
+ * rests on a few rules down — it is why the monitor's event is a gain and not a dip — and it
+ * applies here unchanged. So the asymmetry is flipped: the onset is now the fast edge (~130ms,
+ * ~5.3 opacity/s) and the light decays back to rest over ~900ms through four falling steps, each
+ * smaller than the last. Nothing in it loses light faster than ~2.0/s, a third of the rate the
+ * rise gains it.
+ *
+ * **Why the feeder's hard off is fine and this one was not**: the whole `led-record` blink is
+ * ~180ms, short enough to read as one atomic event — a shutter. Past roughly a quarter second
+ * the eye starts resolving the rise and the fall as separate things, and then each one has to
+ * make sense on its own.
+ *
+ * The verb is a ping: energy out, echo fading — which is what a rover mapping a room is
+ * actually doing, and it is what the decay tail is for. The feeder's is two fast taps, a camera
+ * taking a frame. Those two signatures do not converge even though both now start quickly,
+ * because one is a double and the other has a long tail.
+ *
+ * **5.2s, and specifically not 4.3s.** The shape here changed twice in one sitting and the
+ * period briefly went with it, which put this in *exact lockstep* with `led-standby` — the
+ * record player's breath, which owns 4.3s and documents choosing it to avoid this light and the
+ * feeder's. Identical periods are the one genuinely bad case: two lights that fire together
+ * every cycle are one animation used twice, which is the failure that whole set of numbers
+ * exists to prevent. Nearly-identical periods are almost as bad, because they stay visibly
+ * in step for many cycles at a time before drifting apart. So the period went back to what it
+ * always was and only the curve is new: 5.2s against the feeder's 3s and the speaker's 4.3s,
+ * no simple ratio to any of them. */
 .ambient__fx--rover-status .glow {
-  animation: led-idle 5.2s ease-in-out infinite;
+  animation: led-ping 5.2s ease-in-out infinite;
 }
 
-@keyframes led-idle {
-  0%, 100% { opacity: 0.20; }
-  50%      { opacity: 0.92; }
+/* The percentages are a longer period's share of the *same absolute event* — 129ms up, ~900ms
+ * of decay — so lengthening the rest is all that changed. The event itself is the one that was
+ * tuned, and it is not re-tuned here. */
+@keyframes led-ping {
+  0%, 76% { opacity: 0.18; }
+  /* 129ms. The onset, and now genuinely the fastest edge in here. */
+  78.5%   { opacity: 0.86; }
+  /* The decay: 172ms, 215ms, 258ms, 258ms — decelerating, so it eases into the rest level
+   * rather than arriving at it. `ease-in-out` between every pair on top of that means there is
+   * no discontinuity anywhere for the eye to catch as an event of its own. */
+  81.8%   { opacity: 0.52; }
+  85.9%   { opacity: 0.31; }
+  90.9%   { opacity: 0.21; }
+  95.8%   { opacity: 0.18; }
+  100%    { opacity: 0.18; }
 }
 
 /* The monitor: a screen that is on rather than a screen that is painted.
@@ -671,7 +934,17 @@ canvas.room__canvas {
    * transparent at the inscribed ellipse either way, so there is still no edge to find. */
   --bloom: -44%;
   --core: 0%;
-  animation: pane-flicker 8.3s ease-in-out infinite;
+  /* **Drift only, and back to 8.3s.** The event this layer briefly carried has moved onto its
+   * own light below (`.glow--redraw`), which is a better division than it looks: this bloom is
+   * 1.9x the panel in each dimension and spills onto the desk and the wall, so an event drawn
+   * on it brightens the whole corner of the room at once — a flash — however carefully the
+   * curve is shaped. Held to the drift it is doing the one thing a 34-inch panel's total light
+   * output should do, which is be almost but not quite steady.
+   *
+   * It also means this layer no longer has to be the findable one, so nothing here needs to
+   * get brighter or faster. The period stays 8.3s, and the arithmetic in the old note stands:
+   * not 9, which is three times the feeder's 3s and would beat against it. */
+  animation: pane-drift 8.3s ease-in-out infinite;
 }
 
 /* Amplitude, ~1.6x on what was here before. That much is safe: the earlier note in this file
@@ -681,23 +954,21 @@ canvas.room__canvas {
  * to expose. The ceiling stays under the hotspot wake's 0.4-on-the-silhouette, a different
  * shape entirely, so a lit monitor and a pointed-at monitor still do not look alike.
  *
- * **What did not survive the amplitude change is the two dips, and the reason is worth keeping.**
- * This used to hold two ~120ms drops, on the argument that a screen's light is never quite
- * still and that a quick unevenness reads as *on* where a slow swell reads as a backlight
- * dying. The argument is fine; the implementation tied the dips' depth to the swing, so
- * scaling the animation 1.6x scaled them from 0.08 deep to 0.12. Below some depth a dip is
- * texture and above it the eye resolves it as a discrete event — and one discrete event in an
- * otherwise still room does not read as "a screen is on", it reads as a stutter, which is
- * exactly what got reported. **A perturbation's absolute size is what matters, not its size
- * relative to the thing it perturbs**, so a dip cannot be expressed as a fraction of a swing
- * that is still being tuned.
+ * **This is the "screen is on" half, and it is deliberately not findable.** Nine steps of
+ * 0.04-0.15 over ~1s each, fastest onset ~0.12 opacity/s, which peripheral vision discards
+ * entirely — correct for a backlight and useless as an affordance. That was the whole problem:
+ * the monitor was the hardest object in the room to tell was clickable because this curve was
+ * the only thing it was doing. The affordance is `pane-content` below. The two are separate
+ * lights on purpose, and the note on the rule above says why.
  *
- * So the unevenness is carried by the *shape of the swell* instead: nine keyframes at uneven
- * intervals, each step small enough (0.04-0.15 over ~1s, `ease-in-out` between every pair)
- * that no single one is findable, and the sequence long enough not to read as a loop. The
- * light is never doing the same thing twice in a row and never does anything sudden. Period is
- * 8.3s — not 9, which is three times the feeder's 3s and would beat against it. */
-@keyframes pane-flicker {
+ * The unevenness is carried by the shape of the swell rather than by any discrete perturbation:
+ * each step is small enough that no single one is findable, and the sequence is long enough not
+ * to read as a loop. That is still right *for this layer*. The earlier version of this note also
+ * recorded two ~120ms dips that had to go, and the finding is worth keeping: a perturbation's
+ * absolute size is what matters, not its size relative to the swing it perturbs, so a dip
+ * expressed as a fraction of an amplitude still being tuned grew from texture into a stutter
+ * when the amplitude did. Nothing below is expressed as a fraction of anything. */
+@keyframes pane-drift {
   0%, 100% { opacity: 0.27; }
   12%      { opacity: 0.36; }
   23%      { opacity: 0.47; }
@@ -707,6 +978,86 @@ canvas.room__canvas {
   68%      { opacity: 0.45; }
   80%      { opacity: 0.30; }
   90%      { opacity: 0.34; }
+}
+
+/* **The monitor's affordance: the light of its content changing.** A second, paler light over
+ * the same rect, dark almost all of the time (data/ambient.ts, `redraw`).
+ *
+ * **Why a separate layer rather than a bigger swing on the drift.** Three reasons, and the
+ * first two are why the single-layer version was reverted rather than tuned:
+ *
+ * 1. A brightness pulse is not semantically specific. Ramping the drift to a peak reads as
+ *    *something got brighter*, and a room is full of things that could mean — a flash, a
+ *    flicker, a backlight surge. What a screen actually does when its content changes is emit
+ *    *differently coloured* light, and colour is the one channel here not competing for
+ *    luminance headroom in a bright room. So this light is the accent mixed 58% toward white:
+ *    the same light, paler and cooler, which is what a dark panel throws when something opens
+ *    on it. Luminance and chroma arrive together because they are one light, not two effects.
+ * 2. Reach. The drift blooms 44% past the rect *because* total screen output lands on the desk
+ *    and the wall; an event on that layer therefore lights the whole corner of the room at
+ *    once, which is a flash no curve can talk its way out of. A content change happens on the
+ *    panel, so this blooms only 20% and stays where the change is.
+ * 3. Amplitude: peaks here are ~0.22-0.34 against the drift's ~0.36, so the *combined* leading
+ *    edge is a soft step to roughly 0.62-equivalent rather than the 0.74 the single layer
+ *    needed. Softer, and more legible, because the extra information is in the hue.
+ *
+ * On direction, which the reverted single-layer attempt got right and is kept: the rise is fast
+ * and the settle is slow. A fast *loss* of light is a screen failing — that is what the old two
+ * dips read as, "a backlight dying". A fast gain settling slowly is content arriving. Same
+ * abruptness, opposite reading, and it is the asymmetry that carries it: 135ms up, ~1.5s down. */
+/* `.glow.glow--redraw` rather than `.glow--redraw`: this element wears both classes, so the
+ * drift rule above matches it too and at equal specificity only source order would decide which
+ * `animation` and `--bloom` it ends up with. Doubling the class settles it outright. */
+.ambient__fx--monitor-glow .glow.glow--redraw {
+  /* The accent, 58% of the way to white. Not a new colour and deliberately not a hue rotation:
+   * the room's other accents are destination identities (tokens.css) and a teal-shifted monitor
+   * would be inventing a fourth, while a *desaturated* accent is what a dark panel genuinely
+   * throws when text or a window appears on it. Screen-blended over a near-black panel the two
+   * lights resolve to visibly different colours, which is the cue doing the work. */
+  --glow-c: color-mix(in srgb, var(--accent) 58%, white);
+  --bloom: -20%;
+  --core: 0%;
+  animation: pane-content 22.9s ease-in-out infinite;
+}
+
+/* **Four events at uneven intervals, not one event on a metronome.** A single redraw on a fixed
+ * period is findable on the first viewing and an animation loop on the second — watch it twice
+ * and you are timing it rather than reading it. The gaps here are 6.5s, 4.8s, 5.4s and 6.2s,
+ * and the peaks differ (0.34 / 0.22 / 0.30 / 0.26) because content changes are not all the same
+ * size. Nothing in the sequence predicts the next thing in it.
+ *
+ * **The period matters less than its ratio to the drift underneath.** 22.9s against 8.3s is
+ * 2.76, so every redraw lands on a different phase of the drift and the pair realigns only
+ * after minutes — the same "no common multiple" argument the three tells already use on each
+ * other, applied within one of them. 24.6s was the first choice and is the trap: 2.96 is close
+ * enough to 3 that the events creep back toward the same drift phase every cycle.
+ *
+ * Between events this is at zero and contributes nothing, so the monitor's resting appearance
+ * is exactly the drift and nothing here needs to be subtracted back out. */
+@keyframes pane-content {
+  0%      { opacity: 0; }
+  15.1%   { opacity: 0; }
+  /* 135ms up. The onset, and the only fast thing on this object. */
+  15.7%   { opacity: 0.34; }
+  17.3%   { opacity: 0.14; }
+  20.5%   { opacity: 0.03; }
+  22.2%   { opacity: 0; }
+  43.5%   { opacity: 0; }
+  44.1%   { opacity: 0.22; }
+  45.7%   { opacity: 0.09; }
+  48.9%   { opacity: 0.02; }
+  50.6%   { opacity: 0; }
+  64.5%   { opacity: 0; }
+  65.1%   { opacity: 0.30; }
+  66.7%   { opacity: 0.12; }
+  69.9%   { opacity: 0.03; }
+  71.6%   { opacity: 0; }
+  88.1%   { opacity: 0; }
+  88.7%   { opacity: 0.26; }
+  90.3%   { opacity: 0.11; }
+  93.5%   { opacity: 0.02; }
+  95.2%   { opacity: 0; }
+  100%    { opacity: 0; }
 }
 
 /* ---- hotspots ------------------------------------------------------------
@@ -952,9 +1303,45 @@ canvas.room__canvas {
  * for a different reason: it was a slow ramp with nothing beside it to compare against. A
  * swing that bottoms out near dark reads as a breath at half the amplitude, since what the eye
  * has to find is the *contrast within the cycle*, not the top of it. */
+/* **It was a symmetric sine, and that is the same defect the rover was just fixed for.** 0.08
+ * to 0.55 and back over 4.3s gives a steepest passage of ~0.34 opacity/s, which peripheral
+ * vision discards — so the speaker had quietly become the least findable interactive thing in
+ * the room, for exactly the reason the old `led-idle` was.
+ *
+ * **But it must not become a blink, and the request for one is the thing to resist.** A sudden
+ * blink is the tells' vocabulary, and the tells mean *this is a destination you can push into*
+ * (data/ambient.ts). The record player is the other grammar (CLAUDE.md rule 5): it changes
+ * something in place and the camera never moves. Hue already separates the two — white here,
+ * an accent there — but temporal signature is what a visitor reads first and learns fastest,
+ * and a speaker that blinks like the feeder is a speaker that looks enterable. The room would
+ * be more findable and less legible, which is a bad trade.
+ *
+ * **So: still a breath, and still continuous — but an asymmetric one.** The distinction that
+ * carries the grammar is now stated in the curve itself: *the tells fire and go dark; this
+ * never goes out and never stops moving.* Event-plus-stillness versus continuous motion, which
+ * is also the line the mug's steam sits on the far side of.
+ *
+ * What changed is where the swing's time is spent. The rise is 450ms (~1.0 opacity/s mean,
+ * ~1.6 peak) — roughly 4x the sine's steepest rate, and still a third of the rover's onset, so
+ * it reads as a swell rather than as a click. The fall takes the remaining 3.85s, decelerating,
+ * never faster than ~0.25/s. Fast gain, slow settle, the same direction as everything else in
+ * this file: a fast *loss* of light reads as a machine failing.
+ *
+ * **The 0.55 ceiling is untouched and must stay untouched** — it is what keeps standby's range
+ * out of the playing state's (see the note above, and "already solid light on load, but no
+ * music"). Nothing here is brighter; the light is only quicker to arrive.
+ *
+ * The one cost is mean brightness: front-loading the swing drops the cycle average from ~0.32
+ * to ~0.26, so it is marginally dimmer at a glance while being much easier to catch. **If it
+ * reads dim rather than subtle, the floor is the dial — 0.10 to ~0.14 — never the peak.** */
 @keyframes led-standby {
-  0%, 100% { opacity: 0.08; }
-  50%      { opacity: 0.55; }
+  0%     { opacity: 0.10; }
+  /* 450ms. The one fast edge, and the whole of the change. */
+  10.5%  { opacity: 0.55; }
+  26%    { opacity: 0.38; }
+  45%    { opacity: 0.26; }
+  68%    { opacity: 0.17; }
+  100%   { opacity: 0.10; }
 }
 
 /* **Switching on is a snap, not a fade**, and this replaced a 260ms ease that made pressing
@@ -2113,16 +2500,53 @@ canvas.room__canvas {
   /* Keeps the wider bloom from the rule above — with the breath gone, the size difference is
    * doing more of the work of separating the two states, not less. */
   .control--on .control__led .glow { animation: none; opacity: 1; }
-  /* The poster still covers the load — that is not decoration, it is the difference
-   * between a room and a blank rectangle — but it hands over in a cut, and Room.tsx
-   * unmounts it on the same zero-length schedule so the two cannot disagree. */
-  .room__still,
-  .room__load { transition: none; }
-  /* The ambient tier is motion by definition, so it does not run — and it does not linger
-   * either. Left in place with `animation: none` every wisp would freeze on its first
-   * keyframe, hanging a static smudge over the mug forever, which is worse than absent.
-   * The room without it is exactly the master. */
-  .ambient { display: none; }
+  /* The load keeps everything that is *information* and loses everything that is motion.
+   * How full the arc is, how far the rule runs and which phase is showing are all facts about
+   * the download, so they stay; the easing between their values and the sheen's rotation do
+   * not. Reduced motion asks for less movement, not for a blank rectangle — the same call
+   * `.control__led` above and the ambient tells below make. */
+  .room__still { transition: none; }
+  /* One declaration covers the arc, the rule and the phase thresholds, because all three read
+   * `--load` and it is the only thing being interpolated. */
+  .room { transition: none; }
+  /* The sheen holds as a complete ring rather than vanishing: with nothing turning, it is what
+   * keeps the dial reading as a dial. */
+  .room__load-sheen {
+    animation: none;
+    border-color: color-mix(in srgb, var(--room-ink) 20%, transparent);
+  }
+  /* Its own transition, so it needs its own line — the phases cross-fade on a clock rather
+   * than on the byte value. */
+  .room__load-phase { transition: none; }
+  /* **The ambient tier splits here, because half of it is decoration and half of it is the
+   * affordance.** This used to be `.ambient { display: none }` on the reasoning that the tier
+   * is motion by definition — true of the steam, and wrong about the tells. The electronic
+   * tells are what says which objects can be entered (data/ambient.ts), and hiding them left a
+   * reduced-motion visitor with only the hover wake — and a reduced-motion *touch* visitor,
+   * which is a real combination, with no affordance at all: `:hover` and `:focus-visible` do
+   * not exist there either. That is the same argument `.control__led` below already won, in the
+   * same media query. Reduced motion asks for less movement, not for fewer affordances.
+   *
+   * So the steam goes, for the original reason kept intact: left in place with `animation:
+   * none` every wisp would freeze on its first keyframe and hang a static smudge over the mug
+   * forever, which is worse than absent. Steam is decoration and loses nothing by being gone. */
+  .ambient__fx--steam { display: none; }
+
+  /* And the tells hold, lit, at a level inside their own animated range — a light that is
+   * simply *on* is not motion. Each is set per id rather than once on `.glow`, because these
+   * differ by two orders of magnitude in area: 0.55 on a ~31px indicator and 0.55 across a
+   * 34-inch panel's bloom are not the same amount of light in the room. Same pattern, and the
+   * same reason, as the two `.control__led` declarations further down. */
+  .ambient__fx--feeder-lens .glow,
+  .ambient__fx--rover-status .glow { animation: none; opacity: 0.55; }
+  /* Upper-middle of `pane-drift`'s band: enough to read as a screen that is on. */
+  .ambient__fx--monitor-glow .glow { animation: none; opacity: 0.40; }
+  /* And the content layer goes out entirely rather than being held anywhere. It is the one
+   * thing in the tier that is *only* an event — a redraw held still is not a dimmer redraw, it
+   * is a second pale rectangle of light over the panel forever — and the rule above would
+   * otherwise catch it, since it wears `.glow` too. The screen still reads as on; it just is
+   * not shown changing, which is precisely what was asked for. */
+  .ambient__fx--monitor-glow .glow.glow--redraw { animation: none; opacity: 0; }
 }
 
 /* Set from React alongside the renderer's variant, so one state drives both. Absent until

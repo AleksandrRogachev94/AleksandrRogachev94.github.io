@@ -57,6 +57,13 @@ function Effect({ effect, view, aspect }: { effect: AmbientEffect } & Props) {
             (room.css); the markup is the same for a 30px LED and a 25-inch panel — and for
             a room control's standby light, which wears the same class. */}
         <span className="glow" />
+        {/* A screen also emits the light of whatever it is *showing*, which arrives in
+            events rather than as a level. That is a second light over the same rect — paler,
+            reaching less far, dark between events — and it has to be a second element
+            because one element has one `opacity` and the keyframes already own it on the
+            first. Both are `screen`-blended siblings inside the same bare wrapper, so each
+            mixes with what is beneath it and the pair composites as two lights in a room. */}
+        {effect.redraw && <span className="glow glow--redraw" />}
       </div>
     );
   }
