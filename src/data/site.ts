@@ -7,16 +7,22 @@
  * likely to be needed twice: a footer, an `og:` tag, a JSON-LD block, an `author` on a
  * project page. One place to change a handle beats grep.
  *
- * **Nothing here is aspirational.** Same rule as everywhere else on this site: the dark
- * palette only recites checkable things, and a bio is exactly where that slips. Georgia
- * Tech OMSCS, Philadelphia, and the three projects are facts; "passionate about building
- * delightful experiences" is not a fact and is not here.
+ * **Plain sentences, checkable facts.** Two things this has been pulled back from, both
+ * worth not repeating. It is not a place for clever phrasing: "hardware that won't get any
+ * bigger" meant limited hardware, and a line that needs explaining has already failed. It is
+ * also not a place for vivid-but-unrelated detail — a plasmonic mode found below 10 nm and a
+ * 16 ms frame budget were both true and both cut, the first connected to nothing else on the
+ * page, the second made one project the hinge the whole person swings on (projects are peers;
+ * CLAUDE.md, "Do not reopen").
+ *
+ * What stays out for the original reason: anything the reader is asked to take on trust.
+ * "Passionate about building delightful experiences" is not a fact and is not here.
  */
 
 export const SITE = {
   name: 'Alex Rogachev',
-  /** The `<meta name="description">` and the page's own lede. One line, no adjectives. */
-  tagline: 'Software, computer vision, and things built indoors.',
+  /** The `<meta name="description">` and the page's own lede. One plain line. */
+  tagline: 'Full-stack developer working on web applications and machine learning.',
 } as const;
 
 export interface Link {

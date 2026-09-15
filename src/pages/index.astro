@@ -57,25 +57,46 @@ const description = SITE.tagline;
       <h1>{title}</h1>
       <p class="doc__lede">{description}</p>
 
+      {/*
+        **Plain sentences about a person, and the only crawlable path to the three projects.**
+        Written flat on purpose — several drafts of this were livelier and each one bought that
+        with either a clever phrase that needed explaining or a specific detail that related to
+        nothing else on the page. See the note in site.ts before rewriting it again.
+
+        **The second paragraph stays broad.** A draft pinned him to constrained hardware — a Pi,
+        a browser's GPU — which is a real thread through the current projects and still the wrong
+        thing to say about him: it reads as the kind of engineer he is rather than what he
+        happens to have built lately, and it would date the moment he builds something else. The
+        room is where specific projects live; this paragraph names ranges, not projects.
+
+        The garden is not a hobby list: it is why the window has a yard behind it, the yard has
+        seasons, and there is a feeder in it. One sentence, because this panel has to fit one
+        screen (see `.doc` below).
+
+        **Mind the whitespace around the links.** Astro drops a newline between text and an
+        element, so a line ending in "the monitor is" followed by `<a>` on the next line renders
+        as "the monitor isthe software bench". Every link below keeps its leading space on the
+        same line as its tag. Do not reflow to a formatter's taste.
+      */}
       <p>
-        I&rsquo;m a full-stack web developer at Holman, where I work on AI and machine
-        learning as well. I finished Georgia Tech&rsquo;s OMSCS a few years ago, and
-        I&rsquo;m based near Philadelphia.
+        I work at Holman, where I build web applications and work on AI and machine learning.
+        I have a master&rsquo;s in computer science from Georgia Tech and a B.S. in physics
+        from Moscow State University, and I live near Philadelphia.
       </p>
 
       <p>
-        Most of what I build outside work ends up being software that has to run somewhere
-        specific &mdash; a browser&rsquo;s GPU, or a Raspberry Pi in a yard &mdash; which is
-        the constraint I find most interesting.
+        Outside work I build a bit of everything &mdash; machine learning, graphics, robotics,
+        web apps &mdash; usually whatever I am curious about at the time. I also spend a lot of
+        time in the garden: vegetables, a fig, raspberries, and citrus that comes inside for the
+        winter. The bird feeder started there.
       </p>
 
       <p>
-        The room above is the site. Everything in it is something I actually own or built:
-        the monitor is <a href={ROOM_LINKS.bench.href}>{ROOM_LINKS.bench.label}</a>, the
-        window looks out on <a href={ROOM_LINKS.birdlense.href}>{ROOM_LINKS.birdlense.label}</a>,
-        and the rover on the floor is <a href={ROOM_LINKS.robotrail.href}>{ROOM_LINKS.robotrail.label}</a>.
-        Clicking one in the room pushes the camera into it; the links here are the same
-        places as ordinary pages.
+        The room above is the site. The monitor is <a
+          href={ROOM_LINKS.bench.href}>{ROOM_LINKS.bench.label}</a>, the window looks out on <a
+          href={ROOM_LINKS.birdlense.href}>{ROOM_LINKS.birdlense.label}</a>, and the rover on
+        the floor is <a href={ROOM_LINKS.robotrail.href}>{ROOM_LINKS.robotrail.label}</a>.
+        Clicking one pushes the camera into it; the links here go to the same pages.
       </p>
 
       <p class="doc__elsewhere">
