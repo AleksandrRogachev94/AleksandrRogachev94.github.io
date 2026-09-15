@@ -15,10 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoomRenderer, type RoomRenderer } from "../scripts/roomRenderer";
 import { createSplatRenderer } from "../scripts/splatRenderer";
-import { choose as chooseDaylight, current as currentDaylight, type Daylight }
-  from "../scripts/daylight";
-import { choose as chooseSeason, current as currentSeason, type Season }
-  from "../scripts/season";
+import { current as currentDaylight, type Daylight } from "../scripts/daylight";
+import { current as currentSeason, type Season } from "../scripts/season";
 import {
   createCameraRig,
   pushTimeFor,
@@ -301,13 +299,11 @@ export default function Room() {
         "--par-f",
         (renderer.home.eye[2] - renderer.camera.eye[2]).toFixed(4),
       );
-
     };
 
     // Read here, inside the effect, rather than during render: this is an island, so its
-    // initial HTML is produced at build time, and `current()` reads the *visitor's* clock
-    // and localStorage. Resolved at render it would bake the build machine's timezone into
-    // the page.
+    // initial HTML is produced at build time, and `current()` reads the *visitor's* clock.
+    // Resolved at render it would bake the build machine's timezone into the page.
     const initialDaylight = currentDaylight();
     const initialSeason = currentSeason();
     setDaylight(initialDaylight);
@@ -322,10 +318,9 @@ export default function Room() {
             assetPrefix: SCENE.assetPrefix!,
             onBeforeFrame,
             // The room opens in whatever lighting the visitor's own clock and calendar
-            // imply, unless they have overridden either before (scripts/daylight.ts,
-            // scripts/season.ts). Decided here rather than switched after mount so the
-            // right raster is fetched in the same batch as the geometry — someone arriving
-            // in October never watches the summer room resolve and then dissolve away.
+            // imply. Decided here rather than switched after mount so the right raster is
+            // fetched in the same batch as the geometry — someone arriving in October never
+            // watches the summer room resolve and then dissolve away.
             variant: variantFor(initialSeason, initialDaylight) ?? undefined,
             // Same argument, and the same clock: someone arriving in December should find it
             // already snowing rather than watch it start. Null under reduced motion — the
@@ -441,14 +436,12 @@ export default function Room() {
   const toggleDaylight = useCallback(() => {
     if (!daylight || !season) return;
     const next: Daylight = daylight === "night" ? "day" : "night";
-    chooseDaylight(next);
     setDaylight(next);
     applyLighting(season, next);
   }, [applyLighting, daylight, season]);
 
   const pickSeason = useCallback((next: Season) => {
     if (!daylight) return;
-    chooseSeason(next);
     setSeason(next);
     applyLighting(next, daylight);
   }, [applyLighting, daylight]);

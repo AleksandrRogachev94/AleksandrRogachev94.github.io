@@ -98,9 +98,15 @@ engineering. Do not blend the two palettes.
 
 **5. Two interaction grammars, kept separate.** A _hotspot_ pushes the camera in and goes
 live. A _room control_ changes something in place and never moves the camera — currently
-the record player (ambient audio, off on every load — never restored from storage), the
-day/night override and the season switch. Never make one object both. The guitar is a
-future destination, not the audio toggle.
+the record player (ambient audio), the day/night override and the season switch. Never make
+one object both. The guitar is a future destination, not the audio toggle.
+
+**No room control is ever restored from storage.** All three are off, or on the visitor's own
+clock and calendar, on every load. Day/night and season used to persist a *disagreement* with
+the clock — tri-state, so agreeing cleared it — which was careful work solving a problem the
+room does not have: what it bought was a room that could be wrong about the time of day for
+months because of one curious click. A control changes the room while you are in it. It is
+not a preference.
 
 **6. Adding things should not touch the room art.** A new software project is an entry in
 `src/data/projects.ts` plus a page. A new physical object is an entry in
