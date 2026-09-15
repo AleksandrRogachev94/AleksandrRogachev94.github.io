@@ -25,8 +25,11 @@
  * harness cannot tell which build is mounted. src/data/scene.ts chooses.
  */
 
+import type { WeatherLook } from '../data/weather';
+import { SPLIT_M } from '../data/weather';
 import type { Camera, RoomRenderer } from './roomRenderer';
 import { fitZoom } from './roomGeometry';
+import { createWeather, type WeatherFrame } from './weather';
 
 /** The manifest `tools/sharp_splat_bake.py` writes beside the rasters. */
 export interface SplatManifest {
@@ -80,6 +83,14 @@ export interface SplatManifest {
 
 export interface SplatRendererOptions {
   canvas: HTMLCanvasElement;
+  /**
+   * What is falling in the yard on the first frame, or nothing.
+   *
+   * Passed at construction rather than set afterwards for the same reason `variant` is: the
+   * room should open in the state the visitor's calendar implies, not resolve in summer and
+   * then have snow switched on a frame later.
+   */
+  weather?: WeatherLook | null;
   /** Directory + basename the bake wrote, e.g. `/art/room-day-summer`. */
   assetPrefix: string;
   /**
@@ -711,6 +722,13 @@ export async function createSplatRenderer(
     shape: WebGLTexture;
     quat: WebGLTexture;
     order: Uint32Array;
+    /**
+     * How many of `order` are farther than `SPLIT_M` — where the weather pass is
+     * composited into the sequence. Per cloud, because two reconstructions disagree about
+     * what is behind what, and computed once at ingest by binary search on an array that
+     * is already sorted. See src/data/weather.ts.
+     */
+    split: number;
   }
   const clouds = new Map<string | null, Cloud>();
 
@@ -830,8 +848,10 @@ export async function createSplatRenderer(
    * Runs once per cloud, at the moment that cloud is uploaded — at construction for the one
    * the room opens on, and on first switch for each of the others. Never per frame.
    */
-  function ingestGeom(tex: WebGLTexture, w: number, h: number,
-                      expectAdler: number | undefined, label: string): Uint32Array {
+  function ingestGeom(
+    tex: WebGLTexture, w: number, h: number,
+    expectAdler: number | undefined, label: string,
+  ): { order: Uint32Array; split: number } {
     const bytes = readTexture(gl!, tex, w, h);
     verifyGeomRaster(bytes, N);
     // The general detector. The alpha-bias check above catches only what touches alpha, and
@@ -868,7 +888,17 @@ export async function createSplatRenderer(
     let sum = 0;
     for (let i = 0; i < BUCKETS; i++) { const c = counts[i]; counts[i] = sum; sum += c; }
     for (let i = 0; i < N; i++) out[counts[key[i]]++] = i;
-    return out;
+
+    // Where the weather is composited in. `out` is sorted far to near, so the splats deeper
+    // than the slab are exactly its leading run and one binary search finds its length.
+    // Depth is not monotonic *within* a bucket, so this can be off by less than a bucket —
+    // 0.6mm at this range, which is orders below anything the ordering could show.
+    let lo = 0, hi = N;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (depth[out[mid]] > SPLIT_M) lo = mid + 1; else hi = mid;
+    }
+    return { order: out, split: lo };
   }
 
   clouds.set(cloudA, {
@@ -876,18 +906,24 @@ export async function createSplatRenderer(
     shape: upload(gl, 2, shapeRaster),
     quat: upload(gl, 3, quatRaster),
     order: new Uint32Array(0),   // replaced immediately below; `upload` must run first
+    split: 0,
   });
   bindCloud(cloudA);
-  clouds.get(cloudA)!.order = ingestGeom(
+  const opened = clouds.get(cloudA)!;
+  ({ order: opened.order, split: opened.split } = ingestGeom(
     textures[0], geomRaster.width, geomRaster.height,
-    cloudA === null ? m.geomAdler32 : m.variantAdler32?.[cloudA], cloudA ?? 'day');
-  const order = clouds.get(cloudA)!.order;
+    cloudA === null ? m.geomAdler32 : m.variantAdler32?.[cloudA], cloudA ?? 'day'));
+  const order = opened.order;
 
   // Drawn count, and which layer if one is soloed. Solo is the diagnostic that tells a
   // problem in SHARP's visible surface from one in its hidden layer: the two carry the
   // same scene, so an artifact that survives `L0` alone is in the reconstruction of what
   // you can see, and one that only appears with both is layer B showing through.
   let drawn = order;
+  /** How many of `drawn` precede the weather pass. Kept beside `drawn` because the two are
+   *  only ever meaningful together — an index into an array that is about to be replaced is
+   *  the one way this can go wrong. */
+  let splitAt = 0;
   /** Set whenever something other than the camera changed and the next frame must redraw
    *  even though the eye has not moved. Declared here because `setOrder` below runs at load,
    *  before the frame loop's own state exists. */
@@ -898,8 +934,22 @@ export async function createSplatRenderer(
 
   /** Push the current cloud's draw order (respecting solo) into the instance buffer. */
   function setOrder() {
-    const full = clouds.get(cloudA)!.order;
-    drawn = soloLayer < 0 ? full : full.filter((i) => Math.floor(i / perLayer) === soloLayer);
+    const cloud = clouds.get(cloudA)!;
+    const full = cloud.order;
+    if (soloLayer < 0) {
+      drawn = full;
+      splitAt = cloud.split;
+    } else {
+      drawn = full.filter((i) => Math.floor(i / perLayer) === soloLayer);
+      // Solo drops splats, so the cloud's own split index no longer addresses the right
+      // element and cannot be scaled — it is the count of survivors *before* it, which is one
+      // pass over the prefix rather than over the whole cloud.
+      let kept = 0;
+      for (let i = 0; i < cloud.split; i++) {
+        if (Math.floor(full[i] / perLayer) === soloLayer) kept++;
+      }
+      splitAt = kept;
+    }
     gl!.bindBuffer(gl!.ARRAY_BUFFER, orderBuf);
     gl!.bufferData(gl!.ARRAY_BUFFER, drawn, gl!.STATIC_DRAW);
     dirty = true;
@@ -914,6 +964,31 @@ export async function createSplatRenderer(
     soloLayer = index;
     setOrder();
   }
+
+  /**
+   * The weather, composited into the sequence above at `splitAt`.
+   *
+   * It is created unconditionally and costs one program and two small buffers whether or not
+   * anything is falling — `active` is false until a look is set, and `draw` returns
+   * immediately. Building it lazily would mean compiling a shader during a season switch,
+   * which is the one moment the frame budget is already being spent on an 11MB fetch.
+   */
+  const weather = createWeather(gl, m);
+  /** Reused every frame; see WeatherFrame. */
+  const wFrame: WeatherFrame = {
+    focal: 0, centerX: 0, centerY: 0, viewW: 0, viewH: 0,
+    view: new Float32Array(9), camX: 0, camY: 0, camZ: 0, timeSec: 0, dim: 1,
+  };
+  /**
+   * The weather's own clock, in seconds, advancing only while the room is drawing.
+   *
+   * Not `performance.now()`: that keeps running while the tab is hidden and while a focus
+   * state holds the stage, so coming back to the room would show the field teleported to
+   * wherever it would have been. Accumulating the frame loop's own `dt` means the yard picks
+   * up where it left off, which is what a room you walked away from should do.
+   */
+  let wClock = 0;
+  if (opts.weather) weather.setLook(opts.weather);
 
   gl.disable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
@@ -1031,6 +1106,29 @@ export async function createSplatRenderer(
   const FADE_MS = 900;
   const motionQuery = matchMedia('(prefers-reduced-motion: reduce)');
   let dip = 0;
+  /**
+   * The eased dip value the splats are currently drawn with, mirrored so the weather can be
+   * multiplied by the same thing. Read rather than recomputed, so the two can never disagree
+   * about how dark the room is mid-transition.
+   */
+  let dimNow = 1;
+  /**
+   * The weather waiting for the bottom of the dip.
+   *
+   * A season change swaps the cloud, the colour and the weather, and all three have to land
+   * on the same frame — snow appearing while the room is still autumn-coloured and fading
+   * down is exactly the visible step the dip exists to hide. So `setWeather` defers to
+   * `swap()` whenever a dip is running, and applies immediately when one is not (the
+   * day/night toggle within a season, and the first call at mount).
+   */
+  let pendingLook: WeatherLook | null = null;
+  let lookPending = false;
+  function applyWeather() {
+    if (!lookPending) return;
+    lookPending = false;
+    weather.setLook(pendingLook);
+    dirty = true;
+  }
   let fadeTarget: string | null = null;
   /** What the room was lit by when the dip started. `shown` changes at the bottom, so the
    *  clear colour needs its own memory of where it came from. */
@@ -1072,6 +1170,7 @@ export async function createSplatRenderer(
   /** The bottom of the dip: everything changes at once, with nothing on screen to show it. */
   function swap() {
     swapped = true;
+    applyWeather();
     shown = fadeTarget;
     bindColour(1, shown);
     if (fadeCloud !== cloudA) {
@@ -1106,6 +1205,7 @@ export async function createSplatRenderer(
     // for a single frame.
     const lit = dip < 0.5 ? 1 - dip * 2 : dip * 2 - 1;
     const eased = lit * lit * (3 - 2 * lit);
+    dimNow = eased;
     gl!.uniform1f(u.uDim, eased);
     // The background crosses over once, linearly, across the whole dip, so the fade back up
     // lands on the new season's colour — but it is *also* dimmed by the same eased curve, so
@@ -1120,6 +1220,7 @@ export async function createSplatRenderer(
     fadeFrom = shown;
     dip = 0;
     setClear(shown, shown, 0);
+    dimNow = 1;
     gl!.uniform1f(u.uDim, 1);
   }
 
@@ -1165,10 +1266,12 @@ export async function createSplatRenderer(
         // decides which cloud the geometry units actually hold, and it runs at the swap.
         geom: upload(gl, 0, gR), shape: upload(gl, 0, sR), quat: upload(gl, 0, qR),
         order: new Uint32Array(0),
+        split: 0,
       });
-      clouds.get(target)!.order = ingestGeom(
-        clouds.get(target)!.geom, gR.width, gR.height,
-        target === null ? m.geomAdler32 : m.variantAdler32?.[target], target ?? 'day');
+      const loaded = clouds.get(target)!;
+      ({ order: loaded.order, split: loaded.split } = ingestGeom(
+        loaded.geom, gR.width, gR.height,
+        target === null ? m.geomAdler32 : m.variantAdler32?.[target], target ?? 'day'));
       gR.close(); sR.close(); qR.close();
     }
 
@@ -1196,6 +1299,7 @@ export async function createSplatRenderer(
     last = now;
     opts.onBeforeFrame?.(dt);
     stepDip(dt);
+    if (weather.active) wClock += dt / 1000;
 
     let dpr = Math.min(window.devicePixelRatio || 1, 2);
     // Scale the whole buffer down until it fits the budget. Applied to dpr rather than to
@@ -1222,7 +1326,15 @@ export async function createSplatRenderer(
 
     const movedPx = Math.hypot(camera.eye[0] - drawnEye[0], camera.eye[1] - drawnEye[1],
                                camera.eye[2] - drawnEye[2]) * (m.fx * s) / m.nearZ;
-    if (!dirty && (movedPx < MOTION_EPS_PX || now - lastDrawAt < MIN_FRAME_MS)) return;
+    // Weather counts as motion, not as dirt. `dirty` bypasses the frame cap for a one-off
+    // change that must land now; falling snow is continuous and still wants the 60fps ceiling
+    // — treating it as dirty would uncap the loop to the display's rate on a 120Hz panel.
+    // The room's ambient drift means this rarely decides anything: it matters under
+    // prefers-reduced-motion, where the camera is still — and there the weather is off.
+    if (!dirty
+        && ((movedPx < MOTION_EPS_PX && !weather.active) || now - lastDrawAt < MIN_FRAME_MS)) {
+      return;
+    }
     lastDrawAt = now;
     dirty = false;
     drawnEye[0] = camera.eye[0]; drawnEye[1] = camera.eye[1]; drawnEye[2] = camera.eye[2];
@@ -1283,7 +1395,42 @@ export async function createSplatRenderer(
     gl!.enable(gl!.SCISSOR_TEST);
     gl!.scissor(Math.floor(artX), Math.floor(h - artY - artH),
                 Math.ceil(artW), Math.ceil(artH));
-    gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, drawn.length);
+    if (!weather.active) {
+      gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, drawn.length);
+    } else {
+      // **The yard, then the weather, then the room.** This is the whole occlusion model and
+      // there is nothing else to it: the field is drawn back to front with no depth buffer,
+      // so a pass inserted at `splitAt` is behind everything nearer and in front of
+      // everything farther, for free. The mullions hide flakes crossing them, the wall hides
+      // every flake outside the opening, and the fig in front of the glass covers them and
+      // parallaxes against them correctly — none of which is coded anywhere.
+      gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, splitAt);
+
+      wFrame.focal = m.fx * s;
+      wFrame.centerX = m.cx * s + (w - m.width * s) / 2;
+      wFrame.centerY = m.cy * s + (h - m.height * s) / 2;
+      wFrame.viewW = w;
+      wFrame.viewH = h;
+      wFrame.view = view;
+      wFrame.camX = camera.eye[0];
+      wFrame.camY = -camera.eye[1];
+      wFrame.camZ = -camera.eye[2];
+      wFrame.timeSec = wClock;
+      wFrame.dim = dimNow;
+      weather.draw(wFrame);
+
+      // The weather pass left its own program and VAO bound. Re-establish ours, then walk the
+      // instance attribute forward to `splitAt` so the second draw continues the same sorted
+      // array — WebGL2 has no base-instance parameter, and an offset into the buffer is the
+      // same thing for one call. It is put back immediately: the offset lives in the VAO, so
+      // leaving it set would silently truncate the next frame's first draw.
+      gl!.useProgram(program);
+      gl!.bindVertexArray(vao);
+      gl!.bindBuffer(gl!.ARRAY_BUFFER, orderBuf);
+      gl!.vertexAttribIPointer(locIndex, 1, gl!.UNSIGNED_INT, 0, splitAt * 4);
+      gl!.drawArraysInstanced(gl!.TRIANGLE_STRIP, 0, 4, drawn.length - splitAt);
+      gl!.vertexAttribIPointer(locIndex, 1, gl!.UNSIGNED_INT, 0, 0);
+    }
     gl!.disable(gl!.SCISSOR_TEST);
   }
 
@@ -1331,6 +1478,11 @@ export async function createSplatRenderer(
     setEdgeCut() {},
     setSoloLayer(index: number) { solo(index); },
     setVariant(name: string | null) { void setVariant(name); },
+    setWeather(look: WeatherLook | null) {
+      pendingLook = look;
+      lookPending = true;
+      if (!fading) applyWeather();
+    },
     start() {
       wantRunning = true;
       startLoop();
@@ -1350,6 +1502,7 @@ export async function createSplatRenderer(
         .forEach((t) => gl!.deleteTexture(t));
       colorTex.clear();
       clouds.clear();
+      weather.destroy();
       gl!.deleteBuffer(cornerBuf);
       gl!.deleteBuffer(orderBuf);
       gl!.deleteVertexArray(vao);

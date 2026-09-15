@@ -44,6 +44,7 @@
  * 4x4 matrix. See CLAUDE.md.
  */
 
+import type { WeatherLook } from '../data/weather';
 import { lookAt, mat4, multiply, perspective, type Mat4, type Vec3 } from './mat4';
 import { fitZoom } from './roomGeometry';
 
@@ -145,6 +146,14 @@ export interface RoomRenderer {
    * callers check for it.
    */
   setVariant?(name: string | null): void;
+  /**
+   * What is falling in the yard, or null for nothing — see src/data/weather.ts.
+   *
+   * Optional for the same reason `setVariant` is, and a stronger one: the pass is composited
+   * into the splat draw order at a measured depth, and a mesh build has no draw order to cut.
+   * Callers check for it rather than being handed a no-op.
+   */
+  setWeather?(look: WeatherLook | null): void;
   readonly layerCount: number;
   /**
    * Aspect of the art itself, which is what the reconstruction is fixed to. Anything that

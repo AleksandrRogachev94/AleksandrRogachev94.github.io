@@ -115,6 +115,12 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   through the fluid solver as a dye field) — projects are peers.
 - Generated video for transitions — smoothness comes from real camera motion.
 - Cosmos / particle fields / glowing node graphs — that _is_ the generated-portfolio look.
+  **Amended once, for weather** (`src/data/weather.ts`): leaves in autumn, snow in winter,
+  drawn as instanced quads at 4.5–6.2m in the yard. The distinction that survives is
+  *referent*, not technique — a starfield is pinned to the viewport and stands in for an idea
+  the page does not have, and this is behind the glass, occluded by the mullions and the wall,
+  and parallaxes with the yard because it is in the yard. If it ever stops being diegetic it
+  goes back on the banned list. Nothing else gets particles.
 - CAD or blueprint styling — software first; electronics is not the identity.
 - Photography, and any garage or basement setting. Everything is indoors.
 - A flat, near-frontal view of the room — it looks inert and starves the depth model.
@@ -125,6 +131,20 @@ These were argued through and settled. See docs/PLAN.md for the reasoning.
   as one flat surface by design, so the window returns as wall plane — which is the room
   layer we want. The yard is a separate quad behind it, as the seasonal swap requires
   regardless. Parallax is arranged, not inferred.
+- Masking an outdoor effect with a CSS overlay in the ambient tier. It is a screen-space
+  rectangle over the canvas, so it paints over the mullions and the fig like a sticker, and
+  the mask that would fix it cannot exist: `pinToArt` glues an overlay at one depth, and a
+  fig-shaped hole pinned at the glass's 8.3m slips ~100px off the actual fig at a little over
+  a metre. The renderer needs no mask — see the next entry.
+- **Giving the weather a depth buffer, or re-sorting it against the splats.** Neither is
+  needed and both are the wrong shape. The splat build draws with `DEPTH_TEST` off and gets
+  occlusion purely from a precomputed back-to-front order, so a pass inserted at one measured
+  index is occluded by everything nearer and occludes everything farther for free. Particle
+  depth is constant by design, so that index never moves. The split is a binary search done
+  once per cloud at load. If a genuinely deeper snowfall is ever wanted the answer is more
+  splits, not a sort — but the errors that buys are between a flake and a fence post a metre
+  apart at six metres, and the ones anybody can see (flakes over the mullions, the wall, the
+  fig) are already exactly right.
 - Baking any UI into the monitor art. The screens carry glow, never content — the software
   bench is rendered live in the browser.
 - A layer per object. Props that occlude nothing need no layer of their own, and a

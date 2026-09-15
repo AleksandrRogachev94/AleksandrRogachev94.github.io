@@ -34,6 +34,7 @@ import { TRANSITION, TRANSITION_VARS } from "../scripts/transition";
 import { HOTSPOTS, hotspotById, type Hotspot } from "../data/hotspots";
 import { CONTROLS } from "../data/controls";
 import { SCENE, stillFor, variantFor } from "../data/scene";
+import { weatherFor } from "../data/weather";
 import { SITE } from "../data/site";
 import type { Project } from "../data/projects";
 import { createRoomAudio, type RoomAudio } from "../scripts/roomAudio";
@@ -327,6 +328,12 @@ export default function Room() {
             // right raster is fetched in the same batch as the geometry — someone arriving
             // in October never watches the summer room resolve and then dissolve away.
             variant: variantFor(initialSeason, initialDaylight) ?? undefined,
+            // Same argument, and the same clock: someone arriving in December should find it
+            // already snowing rather than watch it start. Null under reduced motion — the
+            // weather is ambient motion and rule 1 turns all of it off there, and the
+            // renderer then has nothing animating and goes back to drawing only when the
+            // camera moves, which under reduced motion is never.
+            weather: reduced ? null : weatherFor(initialSeason, initialDaylight),
             // Straight onto the element as a custom property, not through React state. This
             // fires once per network chunk — dozens of times over a few seconds — and all it
             // ever does is set the width of one bar.
@@ -421,7 +428,11 @@ export default function Room() {
   // on screen.
   const applyLighting = useCallback((s: Season, d: Daylight) => {
     rendererRef.current?.setVariant?.(variantFor(s, d));
-  }, []);
+    // Straight after the variant, and deliberately not merged into it: the renderer defers
+    // this to the bottom of the dip on its own, so the cloud, the colour and the weather all
+    // land on the frame where the room is dark. See `applyWeather` in splatRenderer.ts.
+    rendererRef.current?.setWeather?.(reduced ? null : weatherFor(s, d));
+  }, [reduced]);
 
   // Both read the *other* axis from state and depend on it, rather than reaching for it
   // inside a `setState` updater. An updater has to be pure — React is entitled to run it
