@@ -1156,8 +1156,16 @@ export async function createSplatRenderer(
    * A season change swaps the cloud, the colour and the weather, and all three have to land
    * on the same frame — snow appearing while the room is still autumn-coloured and fading
    * down is exactly the visible step the dip exists to hide. So `setWeather` defers to
-   * `swap()` whenever a dip is running, and applies immediately when one is not (the
-   * day/night toggle within a season, and the first call at mount).
+   * `swap()` whenever a variant change is under way, and applies immediately when one is not
+   * (the day/night toggle landing on a variant already up, and the first call at mount).
+   *
+   * **"Under way" starts at the click, not at the dip.** `setVariant` is async and only
+   * raises `fading` once it has whatever the variant was missing, which on a first switch to
+   * a season is a colour raster plus ~8.5MB of geometry. Room.tsx calls `setWeather` on the
+   * same tick as `setVariant`, so gating on `fading` alone let the new weather start
+   * immediately and run through the entire fetch *and* the fade down — visible as snow in an
+   * autumn room — while the cached path, where `setVariant` never awaits, behaved correctly.
+   * `variantPending` is raised synchronously instead, so both paths defer.
    */
   let pendingLook: WeatherLook | null = null;
   let lookPending = false;
@@ -1174,6 +1182,12 @@ export async function createSplatRenderer(
   /** The cloud the dip is heading for. Equal to `cloudA` for a colour-only variant. */
   let fadeCloud: string | null = null;
   let fading = false;
+  /**
+   * A variant change has been asked for and has not reached its dip yet — raised
+   * synchronously by `setVariant`, cleared when the dip settles or the fetch gives up. The
+   * only thing that reads it is `setWeather`; see `pendingLook`.
+   */
+  let variantPending = false;
   /** Whether the swap at the bottom of the dip has happened yet. */
   let swapped = false;
 
@@ -1255,6 +1269,7 @@ export async function createSplatRenderer(
   function settleDip() {
     if (!swapped) swap();
     fading = false;
+    variantPending = false;
     fadeFrom = shown;
     dip = 0;
     setClear(shown, shown, 0);
@@ -1262,10 +1277,26 @@ export async function createSplatRenderer(
     gl!.uniform1f(u.uDim, 1);
   }
 
+  /**
+   * Abandon a variant change that could not be fetched. Only the call that is still the
+   * current target clears the flag — a stale one has been superseded by a switch that now
+   * owns it. The deferred weather applies here rather than being swallowed: the lighting
+   * degrades to whatever is already on screen, but a look that needs no fetch should still
+   * land, which is the same explicit degradation as the rest of this file.
+   */
+  function abandonVariant(target: string | null) {
+    if (fadeTarget !== target) return;
+    variantPending = false;
+    if (!fading) applyWeather();
+  }
+
   async function setVariant(name: string | null) {
     const target = name ?? null;
     if (target === shown && !fading) return;
     fadeTarget = target;
+    // Synchronously, before the first await: Room.tsx calls `setWeather` on this same tick
+    // and the answer to "is a change under way" has to already be yes. See `pendingLook`.
+    variantPending = true;
 
     if (!colorTex.has(target)) {
       // Lazily fetched, because most visitors never touch the control. `?v=` is the bake's
@@ -1275,9 +1306,10 @@ export async function createSplatRenderer(
       // be right or the day case becomes `color-null.webp` the first time that changes.
       const suffix = target === null ? '' : `-${target}`;
       const res = await fetch(`${assetPrefix}-splat-color${suffix}.webp${v}`);
-      if (!res.ok) return;                       // degrade to the lighting already on screen
+      // degrade to the lighting already on screen
+      if (!res.ok) { abandonVariant(target); return; }
       const raster = await loadRaster(res);
-      if (!gl || fadeTarget !== target) { raster.close(); return; }
+      if (!gl || fadeTarget !== target) { raster.close(); abandonVariant(target); return; }
       colorTex.set(target, upload(gl, 1, raster));
       raster.close();
     }
@@ -1296,9 +1328,12 @@ export async function createSplatRenderer(
       const suf = target === null ? '' : `-${target}`;
       const res = await Promise.all(['geom', 'shape', 'quat'].map(
         (t) => fetch(`${assetPrefix}-splat-${t}${suf}.bin${v}`)));
-      if (!res.every((r) => r.ok)) return;      // degrade to the lighting already on screen
+      // degrade to the lighting already on screen
+      if (!res.every((r) => r.ok)) { abandonVariant(target); return; }
       const [gR, sR, qR] = await Promise.all(res.map((r) => loadRaster(r, undefined, true)));
-      if (!gl || fadeTarget !== target) { gR.close(); sR.close(); qR.close(); return; }
+      if (!gl || fadeTarget !== target) {
+        gR.close(); sR.close(); qR.close(); abandonVariant(target); return;
+      }
       clouds.set(target, {
         // Uploaded through unit 0 as scratch, never left bound there: `bindCloud` is what
         // decides which cloud the geometry units actually hold, and it runs at the swap.
@@ -1521,7 +1556,7 @@ export async function createSplatRenderer(
     setWeather(look: WeatherLook | null) {
       pendingLook = look;
       lookPending = true;
-      if (!fading) applyWeather();
+      if (!fading && !variantPending) applyWeather();
     },
     start() {
       wantRunning = true;
