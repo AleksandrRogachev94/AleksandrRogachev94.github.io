@@ -25,8 +25,12 @@ import '../../styles/tokens.css';
       <label>edge cut <input type="range" id="edgeCut" min="0.02" max="1" step="0.01" value="1" /><output id="edgeCutOut">1.00</output></label>
       <label>parallax <input type="range" id="parallax" min="0" max="0.12" step="0.002" value="0.02" /><output id="parallaxOut">0.020</output></label>
       <label>drift <input type="range" id="drift" min="0" max="0.08" step="0.002" value="0.022" /><output id="driftOut">0.022</output></label>
+      <label>breath <input type="range" id="breath" min="0" max="0.15" step="0.005" value="0.04" /><output id="breathOut">0.040</output></label>
+      <label>intro reach <input type="range" id="introReach" min="0" max="1.6" step="0.05" value="1" /><output id="introReachOut">1.00</output></label>
+      <label>intro time <input type="range" id="introMs" min="800" max="4500" step="100" value="2600" /><output id="introMsOut">2600</output></label>
       <label>lateral <input type="range" id="lateral" min="0" max="1" step="0.02" value="1" /><output id="lateralOut">1.00</output></label>
       <label>solo <input type="range" id="solo" min="-1" max="2" step="1" value="-1" /><output id="soloOut">all</output></label>
+      <button type="button" id="intro">replay intro</button>
       <p class="hint">click a prop to push into it · Esc pulls back · wheel to dolly · solo isolates one layer</p>
     </aside>
 
@@ -224,11 +228,32 @@ import '../../styles/tokens.css';
           (v) => v.toFixed(3), [0.005, 1]);
         bind('parallax', tuning.parallax, (v) => { tuning.parallax = v; }, (v) => v.toFixed(3));
         bind('drift', tuning.drift, (v) => { tuning.drift = v; }, (v) => v.toFixed(3));
+        // Forward only, so the slider's floor is home rather than a midpoint — see
+        // `RoomTuning.breath` for why there is no other side to give it.
+        bind('breath', tuning.breath, (v) => { tuning.breath = v; }, (v) => v.toFixed(3));
+        // The two dials of the establishing move, next to the replay button below because
+        // they are useless apart: reach and duration trade against each other, and the only
+        // way to judge the trade is to change one and watch the move again immediately.
+        //
+        // Reach runs past 1 on purpose, but note what it spends. The forward component has
+        // metres of headroom; the lateral is already on the disocclusion budget at 1, so
+        // above ~1.15 the slider is buying drama with holes in the fig corner. Watch the
+        // excursion readout, not the picture — 0.357% of pixels is easy to miss in motion
+        // and is still a hole.
+        bind('introReach', tuning.introReach, (v) => { tuning.introReach = v; });
+        bind('introMs', tuning.introMs, (v) => { tuning.introMs = v; }, (v) => v.toFixed(0),
+          [800, 4500]);
         bind('lateral', tuning.lateral, (v) => { tuning.lateral = v; });
         // Isolating a layer is how you tell a bad mask from a bad fill: a hole in the
         // shell is a mask that missed, a smear inside one layer is a layer that is missing.
         bind('solo', -1, (v) => { renderer.setSoloLayer(v); },
           (v) => (v < 0 ? 'all' : `L${v}`), [-1, Math.max(0, renderer.layerCount - 1)]);
+
+        // The establishing move fires once per page load on the site, which makes it the one
+        // camera behaviour that cannot be judged by reloading and squinting. Replaying it on
+        // demand, against the same tuning the site ships, is the whole point of the harness.
+        document.getElementById('intro')!
+          .addEventListener('click', () => rig!.playIntro());
 
         status.textContent = 'home';
         renderer.start();

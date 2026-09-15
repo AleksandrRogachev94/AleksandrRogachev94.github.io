@@ -175,13 +175,33 @@ function reciprocalDepth(distanceM: number): number {
 export function pinToArt(
   box: ScreenRect,
   distanceM: number,
-): { left: string; top: string; width: string; height: string } {
+): { left: string; top: string; width: string; height: string; '--pin-s': string } {
   const invZ = reciprocalDepth(distanceM).toFixed(4);
+  /**
+   * How much the art has grown under this overlay, the camera being nearer than the master's
+   * viewpoint was. Lateral motion slides an overlay off its object; forward motion *scales*
+   * the art about the frame centre, and only the first used to be compensated.
+   *
+   * A point at depth d magnifies by 1 / (1 - f/d); this is its first-order expansion, which
+   * is what lets one shared `--par-f` serve every depth through a plain multiply. Under 1% at
+   * the nearest pinned object (3.24m); it would be poor near the clip plane, and nothing is
+   * pinned there.
+   *
+   * Exposed as `--pin-s` too, because children positioned in px inside a pinned box (the LED,
+   * the wake) must scale their offsets by the same factor or they slide within a box that is
+   * itself correct.
+   */
+  const s = `(1 + var(--par-f, 0) * ${invZ})`;
   return {
-    left: `calc(${box.left}px + var(--par-x, 0) * ${invZ} * 1px)`,
-    top: `calc(${box.top}px + var(--par-y, 0) * ${invZ} * 1px)`,
-    width: `${box.width}px`,
-    height: `${box.height}px`,
+    // Scaling about `50%` — the centre of the overlay layer, which is the room box, which is
+    // where the cover-crop centres the art. Magnification is radial from the optical axis, so
+    // an offset measured from the frame's centre is the one that scales; `left` from the box's
+    // own edge is not.
+    left: `calc(50% + (${box.left}px - 50%) * ${s} + var(--par-x, 0) * ${invZ} * 1px)`,
+    top: `calc(50% + (${box.top}px - 50%) * ${s} + var(--par-y, 0) * ${invZ} * 1px)`,
+    width: `calc(${box.width}px * ${s})`,
+    height: `calc(${box.height}px * ${s})`,
+    '--pin-s': s,
   };
 }
 

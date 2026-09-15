@@ -36,6 +36,29 @@ export interface RoomTuning {
    * happening, not a second, competing parallax.
    */
   drift: number;
+  /**
+   * Amplitude of the idle *forward* breath — a third, slower drift axis along Z.
+   *
+   * Separate from `drift` because it is bounded by something else. Lateral drift is capped by
+   * disocclusion; a forward dolly reveals nothing, so it costs none of that budget.
+   *
+   * **One-sided, and not by taste.** The renderer scissors to the master's rectangle, so
+   * behind home the picture shrinks away from a frame it cannot grow past. The breath runs
+   * home -> forward -> home and never crosses.
+   */
+  breath: number;
+  /**
+   * Multiplier on `INTRO_START` — how far the establishing move reaches. 1 is the shipping
+   * offset; the harness's slider is the point of it being a number rather than a constant.
+   *
+   * Reach and duration are the two dials that decide whether the move reads as assertive or
+   * as showing off, and that is not a judgement anybody can make from the numbers. It is
+   * also not one that survives a round trip through a rebuild, which is why they live here
+   * with the rest of the feel rather than as module constants.
+   */
+  introReach: number;
+  /** How long the establishing move takes, in ms. See `introReach`. */
+  introMs: number;
   /** How much of the push is translation rather than rotation. See the note in `update`. */
   lateral: number;
 }
@@ -75,8 +98,18 @@ export const ROOM_TUNING: RoomTuning = {
   farZ: SCENE.farZ,
   fovDeg: SCENE.fovDeg,
   travel: 0.55,
-  parallax: 0.065,
-  drift: 0.05,
+  // Three motion states with different jobs, and the sizes say which is which: the intro
+  // proves the room is spatial, the cursor says you can look around it, drift says it is
+  // alive while you do nothing. Drift is quietest — past a point autonomous motion reads as
+  // floating rather than living. The cursor is largest, because it is the one motion a
+  // visitor *causes* and so has to be legible as a response; below ~0.07 it only registered
+  // on a fast flick, which is indistinguishable from lag. The clamp in `update` composes all
+  // three, so none has to be sized for the worst case of the others.
+  parallax: 0.085,
+  drift: 0.03,
+  breath: 0.025,
+  introReach: 1,
+  introMs: 2600,
   lateral: 1,
 };
 
@@ -118,10 +151,26 @@ export interface CameraRig {
   pushToImagePoint(nx: number, ny: number, distanceM: number, travel?: number): void;
   /** Come home. Safe to call mid-push. */
   release(): void;
+  /**
+   * Play the one-shot establishing move. Call it while the canvas is still hidden: the
+   * envelope is 1 on its first frame, and 1 *is* the start pose, so this is a teleport
+   * followed by a settle. Anything watching at that instant sees the teleport — which is
+   * exactly the jump that removing the poster fixed (Room.tsx, `revealed`). Calling it again
+   * restarts it, and under reduced motion it does nothing at all.
+   *
+   * **It takes no aim point.** Turning the camera toward an object as it travels improves
+   * the move and breaks everything else: `pinToArt` glues overlays to the art by compensating
+   * translation and magnification, and a rotation is neither. A 1.5deg yaw slides the frame
+   * ~38px while every hotspot, control and light stays put — enough to take the speaker's LED
+   * off the speaker. Screen-space overlays and a rotating camera cannot both be right.
+   */
+  playIntro(): void;
   /** Eased progress, 0 at home and 1 fully pushed in. Drives the UI cross-fade. */
   progress(): number;
   /** Cursor position in -1..1, for the at-rest parallax. */
   setPointer(x: number, y: number): void;
+  /** The cursor has left the room; ease the lean away. See `pointerIn` in the factory. */
+  clearPointer(): void;
   /** Harness affordance: wheel offset along -Z. Not used by the site. */
   setDolly(z: number): void;
   /** How much painted background the current camera position is asking for, in plate px. */
@@ -185,6 +234,72 @@ export const pushTimeFor = (p: number): number => {
  */
 const DRIFT_PERIOD_X_MS = 21_000;
 const DRIFT_PERIOD_Y_MS = 15_000;
+/**
+ * The breath's period, and the same incommensurability argument as above — 26 shares no
+ * small factor with 21 or 15, so the three axes realign on a timescale nobody sits through.
+ *
+ * Slowest of the three on purpose. Depth motion is the most noticeable of the three axes
+ * per unit of amplitude, so it is the one that most easily tips from "the room is being
+ * looked at" into "something is animating", which is the failure the two periods above are
+ * already written to avoid.
+ */
+const DRIFT_PERIOD_Z_MS = 26_000;
+
+/**
+ * The establishing move: the room's one chance to say it is a reconstruction rather than a
+ * photograph with a slow pan on it.
+ *
+ * Idle drift cannot carry that claim. It is deliberately below the threshold of "something
+ * is animating" (see the periods above), and anything under that threshold is indis-
+ * tinguishable from a Ken Burns pan — which is exactly the reading this move exists to
+ * foreclose. So the evidence has to be delivered once, deliberately, in the window the
+ * visitor is already spending on the title card, and then never again.
+ *
+ * **It is monotonic: it starts pushed in, travels once, and arrives home. That is the whole
+ * lesson of the version before it,** which went out from home and came back so that the
+ * poster could hand over in exact register at the start. It read as "still, then forward,
+ * then backward", and every part of that was structural rather than a tuning problem. The
+ * return leg is a reversal, and a camera that reverses has not been anywhere. The stillness
+ * was the ease-*in* that protected the handover — a move that begins at zero velocity
+ * begins by not moving, and 250ms of a camera not moving is a stall, not an anticipation.
+ *
+ * A settle has neither defect. It begins at its maximum speed, decelerates the whole way,
+ * and stops once. There is one arrival, at the end, which is where arrivals belong — the
+ * same argument `LINEAR_TAIL` makes about the push.
+ *
+ * **Starting pushed in is safe; starting pulled back would not be.** The renderer scissors
+ * to the master's own rectangle (splatRenderer.ts, "Nothing draws outside the master's own
+ * rectangle"), so behind home the picture shrinks away from a frame it cannot grow past.
+ * This move never goes there: it lives entirely on the forward side and approaches home
+ * from it. The near clip is 0.05 against nearest content at ~1.0m, so 0.22m of forward
+ * travel is nowhere near anything.
+ *
+ * **The depth separation is not authored, and must not be.** The obvious way to sell
+ * parallax is to give each layer a multiplier — background 0.2x, foreground 1.5x. That is
+ * how you fake it in a 2.5D stack, and it is exactly wrong here: this is real geometry, so
+ * a dolly produces the separation by construction. At 0.22m the ~1m foreground magnifies
+ * 1.28x and the 8.3m yard 1.03x. Authoring multipliers on top of that would be distorting a
+ * measurement to look more like itself.
+ */
+/**
+ * Where the establishing move begins, relative to home. It ends at home.
+ *
+ * **A zoom-out: the camera starts inside the room and withdraws to the composed viewpoint.**
+ * Any move that ends where it began has to turn around, and a turn-around reads as the camera
+ * changing its mind however smoothly it is eased. Starting away and arriving is the only
+ * shape with no reversal in it.
+ *
+ * Forward does the work, because a dolly is what makes foreground and background *disagree*
+ * about how fast they move — withdrawing 0.30m shrinks the ~1m foreground by a third while
+ * the 8.3m yard barely changes. A lateral pan of the same size moves everything alike, which
+ * is what a photograph does. The lateral component is along for the ride, to keep the path
+ * off a straight line.
+ *
+ * Only ever approaches home from the forward side. Behind home the renderer's scissor runs
+ * out of reconstruction (splatRenderer.ts); the near clip is 0.05 against content at ~1.0m,
+ * so the forward end has room to spare.
+ */
+const INTRO_START: Vec3 = [-0.09, 0.02, -0.30];
 
 export function createCameraRig(
   renderer: RoomRenderer,
@@ -215,8 +330,44 @@ export function createCameraRig(
   // lerp factor, so it doesn't get sharper or softer at different refresh rates.
   let pointerTarget = { x: 0, y: 0 };
   let pointer = { x: 0, y: 0 };
-  const POINTER_SMOOTH_MS = 120;
+  const POINTER_SMOOTH_MS = 100;
+  /**
+   * How long the camera holds a cursor position after the cursor stops, and how quickly it
+   * gives it up afterwards.
+   *
+   * **Without this the room does not return to rest.** `setPointer` only fires on movement,
+   * so a mouse parked at the edge of the window — or one that left it entirely, which sends
+   * no event at all — left the camera leaning that way indefinitely, with idle drift
+   * wandering around an off-centre home. The room had a resting pose that depended on where
+   * a cursor had last been, which is not a resting pose.
+   *
+   * Returning makes the two ambient layers say different things, which is the point of
+   * having both: parallax is the room answering *you*, and drift is what it does when you
+   * are not there. A lean that never decays merges them into one permanent offset and the
+   * answer stops reading as an answer.
+   *
+   * The hold exists so that reading something in a corner of the room is not treated as
+   * leaving. 700ms is longer than a glance and shorter than a pause; the return itself is
+   * slow enough that it is never the motion you notice, only the absence of a lean.
+   */
+  const POINTER_RETURN_MS = 1400;
+  /**
+   * Whether the cursor is still in the room. Only its *leaving* retires a lean.
+   *
+   * Holding where the cursor stops is intended — a camera that creeps back while you are
+   * still looking at the corner you moved it toward is taking the room off you. But a cursor
+   * that leaves the window sends no event at all, so without this the room kept a lean nobody
+   * was holding, with drift wandering around a rest pose set by where a pointer last was.
+   */
+  let pointerIn = false;
   let dolly = 0;
+  /**
+   * Milliseconds into the establishing move, or null when it is not playing. Advanced by
+   * `update`, so it is paused by everything that already pauses the rAF — a visitor who
+   * loads the page on a background tab still gets the move when they arrive at it, rather
+   * than having it play to nobody.
+   */
+  let introMs: number | null = null;
   /** Runs whenever `update` does, so drift is paused for free by everything that already
    * stops the rAF (tab hidden, room scrolled off, a focus state live) — see roomRenderer's
    * `onBeforeFrame`, which is the only caller. */
@@ -228,6 +379,36 @@ export function createCameraRig(
   let reduced = motionQuery.matches;
   const onMotionChange = () => { reduced = motionQuery.matches; };
   motionQuery.addEventListener('change', onMotionChange);
+
+  /**
+   * How much of `INTRO_START` is still applied: 1 at the first frame, 0 once home. Both
+   * components only ever decay, so nothing reverses.
+   *
+   * **Two exponents, and which decays faster is the whole of the arc.** A single curve is a
+   * straight line in the X-Z plane. Letting the lateral go first (power 4 against 2.2) spends
+   * it while the camera is still deep in the room — where a given world-X offset buys the
+   * most screen movement, because near objects are nearest — and leaves the remaining
+   * two-thirds as a clean withdrawal. Swoop, then open out.
+   *
+   * Ease-out in both: maximum speed on the first frame, decelerating to nothing. A move that
+   * departs from rest can start at full velocity, which is why this needs no ease-in and
+   * therefore has no stall. The stall is what made the very first version read as two moves.
+   *
+   * Returns null when nothing is playing, which includes the whole of reduced motion. Read
+   * live, so toggling the OS setting mid-move stops it rather than needing a reload.
+   */
+  function introEnv(): { lat: number; dep: number } | null {
+    if (introMs === null || reduced) return null;
+    const u = introMs / tuning.introMs;
+    if (u >= 1) {
+      // Home, and nothing left to do. Retiring it here keeps this a pure function of a live
+      // move, and means a later `playIntro()` — the harness replaying it — starts clean.
+      introMs = null;
+      return null;
+    }
+    const k = 1 - u;
+    return { lat: Math.pow(k, 4), dep: Math.pow(k, 2.2) };
+  }
 
   const offsetX = () => renderer.camera.eye[0] - renderer.home.eye[0];
   const offsetY = () => renderer.camera.eye[1] - renderer.home.eye[1];
@@ -264,6 +445,17 @@ export function createCameraRig(
     // cursor for the people who had asked it not to.
     const amp = reduced ? 0 : tuning.parallax;
     clockMs += dtMs;
+    if (introMs !== null) introMs += dtMs;
+    // Give up a stale cursor. Eased rather than dropped, and applied to the *target* rather
+    // than to the smoothed value, so the return goes through the same 120ms smoothing every
+    // other pointer change does and cannot arrive as a snap.
+    if (!pointerIn) {
+      const returnK = 1 - Math.exp(-dtMs / POINTER_RETURN_MS);
+      pointerTarget = {
+        x: lerp(pointerTarget.x, 0, returnK),
+        y: lerp(pointerTarget.y, 0, returnK),
+      };
+    }
     const pointerK = reduced ? 1 : 1 - Math.exp(-dtMs / POINTER_SMOOTH_MS);
     pointer = {
       x: lerp(pointer.x, pointerTarget.x, pointerK),
@@ -275,9 +467,50 @@ export function createCameraRig(
     const driftAmp = reduced ? 0 : tuning.drift;
     const driftX = Math.sin((clockMs / DRIFT_PERIOD_X_MS) * Math.PI * 2) * driftAmp;
     const driftY = Math.sin((clockMs / DRIFT_PERIOD_Y_MS) * Math.PI * 2) * driftAmp * 0.6;
-    const px = (pointer.x * amp + driftX) * (1 - e);
-    const py = (pointer.y * amp * 0.6 + driftY) * (1 - e);
-    const home: Vec3 = [px, py, -dolly];
+    // Raised cosine rather than a sine, which is the whole of the one-sidedness: it leaves
+    // home at zero velocity, reaches `breath` forward, and returns, without ever going
+    // positive. A sine here would spend half its period *behind* home, where the scissored
+    // frame has nothing to show — see the note on `RoomTuning.breath`.
+    const breathAmp = reduced ? 0 : tuning.breath;
+    const driftZ = -((1 - Math.cos((clockMs / DRIFT_PERIOD_Z_MS) * Math.PI * 2)) / 2) * breathAmp;
+    // The establishing move *replaces* ambient motion rather than adding to it — a cross-fade
+    // on `ia`, not a sum. Summing would put the peak at 0.10 + 0.115 = 0.215m, nearly double
+    // the disocclusion budget, and would do it at the one moment the room has a visitor's
+    // whole attention. Cross-faded, the total offset is bounded by the larger of the two.
+    //
+    // Both then fade together on `e`, so a hotspot clicked mid-intro simply wins: the push
+    // takes the camera over and the intro's clock runs out unwatched, with no cancellation
+    // and no state to unwind. Same reason `release()` does not clear `target`.
+    const env = introEnv();
+    const iLat = env ? env.lat : 0;
+    const iDep = env ? env.dep : 0;
+
+    // Ambient motion cross-fades against the move rather than adding to it. Summed, an intro
+    // and a full-strength drift-plus-cursor would be well over the disocclusion budget at the
+    // one moment the room has a visitor's whole attention — and would be a second, slower
+    // gesture inside a deliberate one. It arrives as the move leaves.
+    const ambient = 1 - iLat;
+    const reach = tuning.introReach;
+
+    let px = INTRO_START[0] * reach * iLat + (pointer.x * amp + driftX) * ambient;
+    let py = INTRO_START[1] * reach * iLat + (pointer.y * amp * 0.6 + driftY) * ambient;
+
+    // **One clamp on total lateral excursion, applied after everything has had its say.**
+    // Several independent sources contribute to it — the move, idle drift, the cursor — and
+    // each is individually inside the budget while their sum need not be. Capping the composed
+    // offset rather than rationing each source means no source has to be sized for the worst
+    // case of the others, and the reconstruction's real limit is enforced in exactly one place.
+    const lateral = Math.hypot(px, py);
+    if (lateral > SCENE.excursion) {
+      const k = SCENE.excursion / lateral;
+      px *= k;
+      py *= k;
+    }
+    px *= 1 - e;
+    py *= 1 - e;
+
+    const pz = (INTRO_START[2] * reach * iDep + driftZ * ambient) * (1 - e);
+    const home: Vec3 = [px, py, -dolly + pz];
 
     const cam = renderer.camera;
     if (target) {
@@ -324,11 +557,17 @@ export function createCameraRig(
     // Stop wanting the target; keep it. `update` retires it once the camera is actually
     // home, which is what makes the retreat a move rather than a cut.
     release() { pushing = false; },
+    // Restartable by design: assigning rather than guarding means the dev harness can replay
+    // the move from a button without a reset, and a second call mid-move is a legible
+    // "do it again" rather than a silent no-op.
+    playIntro() { introMs = 0; },
     // What `update` actually applied this frame, not a second evaluation of the curve —
     // the two must agree, because the stylesheet uses this to decide how much to blur the
     // room and the panel is registered against where the camera really is.
     progress: () => eased,
-    setPointer(x, y) { pointerTarget = { x, y }; },
+    setPointer(x, y) { pointerTarget = { x, y }; pointerIn = true; },
+    // The room has been left. The lean goes with it — see `pointerIn`.
+    clearPointer() { pointerIn = false; },
     setDolly(z) { dolly = clamp(z, -1.5, 1.5); },
     /**
      * Sideways camera motion is the only thing that uncovers painted background, so it is

@@ -43,11 +43,15 @@ interface Props {
 export default function ObjectLight({ src, wakeRect, box, view, aspect, lightRef }: Props) {
   const lit = imageRectToScreen(wakeRect, view.w, view.h, aspect);
 
+  // Same `--pin-s` the LED uses, and for the same reason: this offset is measured inside a
+  // box that scales with the camera's distance, so it has to scale with it. A wake is soft
+  // enough to hide a pixel or two of slide, which is exactly why it was not the thing that
+  // revealed the missing axis — but it is the same bug.
   const wakeStyle: CSSProperties = {
-    left: `${lit.left - box.left}px`,
-    top: `${lit.top - box.top}px`,
-    width: `${lit.width}px`,
-    height: `${lit.height}px`,
+    left: `calc(${lit.left - box.left}px * var(--pin-s, 1))`,
+    top: `calc(${lit.top - box.top}px * var(--pin-s, 1))`,
+    width: `calc(${lit.width}px * var(--pin-s, 1))`,
+    height: `calc(${lit.height}px * var(--pin-s, 1))`,
   };
 
   const maskStyle: CSSProperties = {

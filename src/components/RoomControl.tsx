@@ -60,11 +60,14 @@ export default function RoomControlButton({ control, box, view, aspect, on, onTo
   // authored against the master and both have to land on the object rather than on the
   // tap target's corner.
   const led = imageRectToScreen(control.ledRect, view.w, view.h, aspect);
+  // Scaled by `--pin-s`, which the parent's `pinToArt` defines: the button's own box already
+  // grows as the camera comes forward, and an offset in fixed px inside a growing box slides
+  // across it. This is the LED that used to sit still while the room moved toward it.
   const ledStyle: CSSProperties = {
-    left: `${led.left - box.left}px`,
-    top: `${led.top - box.top}px`,
-    width: `${led.width}px`,
-    height: `${led.height}px`,
+    left: `calc(${led.left - box.left}px * var(--pin-s, 1))`,
+    top: `calc(${led.top - box.top}px * var(--pin-s, 1))`,
+    width: `calc(${led.width}px * var(--pin-s, 1))`,
+    height: `calc(${led.height}px * var(--pin-s, 1))`,
   };
 
   return (

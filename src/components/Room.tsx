@@ -123,15 +123,6 @@ const coverMsFor = (h: Hotspot) =>
   // `--room-bg`, which is warm paper, in the middle of a fade to black.
   cuts(h) ? cutMsFor(h) + 80 : COVER_MS;
 
-/**
- * How long the poster takes to hand over to the canvas, and therefore how long it stays
- * mounted after the renderer is ready. Must match `.room__still`'s transition in room.css.
- *
- * Not in transition.ts, deliberately: that file is one *timeline*, whose whole value is
- * that the camera, the panel and the two timers cannot disagree about a single gesture.
- * This is a load event that happens at most once and shares no boundary with any of it.
- */
-const POSTER_FADE_MS = 700;
 
 /**
  * How long the title card stays *after* the room is ready to draw.
@@ -303,6 +294,14 @@ export default function Room() {
       );
       root.style.setProperty("--par-x", k.kx.toFixed(2));
       root.style.setProperty("--par-y", k.ky.toFixed(2));
+      // The third axis. Forward displacement in metres, which `pinToArt` turns into a
+      // per-depth magnification — without it every pinned overlay keeps its home-pose size
+      // while the art under it grows, and the speaker's LED detaches from the speaker.
+      root.style.setProperty(
+        "--par-f",
+        (renderer.home.eye[2] - renderer.camera.eye[2]).toFixed(4),
+      );
+
     };
 
     // Read here, inside the effect, rather than during render: this is an island, so its
@@ -705,15 +704,30 @@ export default function Room() {
     return () => clearTimeout(t);
   }, [introGoing, reduced]);
 
-  const [poster, setPoster] = useState(true);
+  /**
+   * Whether the canvas is up. It has been drawing since `drawable` — behind nothing, at zero
+   * opacity — which is what lets the camera take its start pose unobserved and means what
+   * fades up is a room already moving rather than one starting from a standstill.
+   *
+   * **There is no poster over the splat download any more, and that is deliberate.** Handing a
+   * flat master over to the canvas is free only while the camera is at home, where the
+   * reconstruction reprojects to the master exactly. The establishing move starts away from
+   * home, and no correction closes that gap: the error is per-depth (the 1m foreground wants
+   * ~8x the screen shift the 8.3m yard does) while a CSS transform has one value to give.
+   *
+   * So the load shows the room's own ground, the load bar and the title card, and the canvas
+   * fades up out of it. Nothing can misregister against a flat colour. The still image remains
+   * for the two cases where it genuinely is the room: no WebGL2, and no scripting.
+   *
+   * The fade's duration lives in room.css and nothing here reads it — the reveal is a class
+   * change, not a timer.
+   */
+  const [revealed, setRevealed] = useState(false);
   useEffect(() => {
     if (!drawable) return;
-    const t = window.setTimeout(
-      () => setPoster(false),
-      reduced ? 0 : POSTER_FADE_MS,
-    );
-    return () => clearTimeout(t);
-  }, [drawable, reduced]);
+    rigRef.current?.playIntro();
+    setRevealed(true);
+  }, [drawable]);
 
   // ---- at-rest parallax ----------------------------------------------------
 
@@ -725,6 +739,13 @@ export default function Room() {
       ((e.clientX - r.left) / r.width) * 2 - 1,
       1 - ((e.clientY - r.top) / r.height) * 2,
     );
+  }, []);
+
+  // The cursor has left the room. Distinct from it merely stopping, which keeps its lean —
+  // see `pointerIn` in cameraRig.ts. `pointerleave` fires for touch too, at the end of a
+  // drag, which is the right moment there as well.
+  const onPointerLeave = useCallback(() => {
+    rigRef.current?.clearPointer();
   }, []);
 
   // ---- render --------------------------------------------------------------
@@ -768,17 +789,24 @@ export default function Room() {
       // every frame by the rig; React only touches the keys it owns, so the two coexist.
       style={TRANSITION_VARS as React.CSSProperties}
       onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
     >
       {webgl && (
-        <canvas ref={canvasRef} className="room__canvas" aria-hidden="true" />
+        <canvas
+          ref={canvasRef}
+          className={`room__canvas ${revealed ? "" : "room__canvas--down"}`}
+          aria-hidden="true"
+        />
       )}
 
-      {/* On top of the canvas until there is something on it, and the *only* thing there is
-          when WebGL2 is missing — `drawable` never becomes true on that path, so this never
-          fades and the still fallback is unchanged. Degrade explicitly, never silently. */}
-      {poster && (
+      {/* **The still is now the fallback and nothing else.** It used to double as the cover
+          over the splat download, which is what put a flat image on screen at the same moment
+          as a moving camera — see `revealed`. On this path there is no camera to disagree with
+          it: `drawable` never becomes true without WebGL2, so this is simply the room.
+          Degrade explicitly, never silently. */}
+      {!webgl && (
         <img
-          className={`room__canvas room__still ${drawable ? "room__still--gone" : ""}`}
+          className="room__canvas room__still"
           // **No `src` until the visitor's clock and calendar have been read**, and that is
           // the whole point rather than an oversight. This island is server-rendered, so a
           // `src` here is chosen at build time — and the browser's preload scanner finds an
@@ -799,7 +827,7 @@ export default function Room() {
           it, and costs scripted visitors nothing: a browser with scripting enabled does not
           parse `<noscript>` contents as markup, so nothing in here is ever fetched. Summer
           day, because a static page cannot know better and that is the base build. */}
-      {poster && !(season && daylight) && (
+      {!drawable && !(season && daylight) && (
         <noscript>
           <img className="room__canvas room__still" src={STILL} alt="" />
         </noscript>
@@ -809,7 +837,7 @@ export default function Room() {
           light, not chrome — so this is a line of light along the floor of the frame rather
           than a spinner, and it is driven by real bytes (`--load`), never by a timeline
           guessing at how long a network takes. */}
-      {poster && webgl && <div className="room__load" aria-hidden="true" />}
+      {!drawable && webgl && <div className="room__load" aria-hidden="true" />}
 
       {/*
         The title card. **`aria-hidden`, and that is not an oversight** — every word here is

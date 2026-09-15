@@ -176,6 +176,25 @@
  * (roomGeometry.ts), so it lands in register with what replaces it: the handover reads as
  * the picture gaining depth, not as a page finally loading. It doubles as the no-WebGL2
  * fallback, which is what it was built for originally. */
+/* The canvas comes up from nothing, having taken its start pose while it was hidden — so
+ * what fades in is a room already in motion rather than one starting from a standstill.
+ *
+ * An element selector, because `.room__still` carries `room__canvas` too and must not inherit
+ * this — that one is the no-WebGL fallback and is simply present, never faded.
+ *
+ * The duration is owned here and has no counterpart in Room.tsx: the reveal is a class change
+ * rather than a timer, so there is nothing for it to drift out of step with.
+ *
+ * Not `visibility` and not a `display` swap: the canvas has to keep drawing all the way
+ * through, or there is no motion to fade up into. */
+canvas.room__canvas {
+  transition: opacity 400ms ease-out;
+}
+
+.room__canvas--down {
+  opacity: 0;
+}
+
 .room__still {
   /* **Absolute, and it matters now.** These two used to be a ternary — canvas or image,
    * never both — so the image could sit in flow. It now sits *over* a live canvas while
@@ -191,12 +210,11 @@
    * picture, and `.room`'s own `--room-bg` shows through it. The canvas this hands off to
    * clears to the same colour (roomRenderer.ts / splatRenderer.ts), so the two stay in
    * register at the handover instead of flashing paper-to-black. */
-  /* Warms up as it loads. `--load` is real bytes, written from the fetch (Room.tsx), and
-   * the room coming up to full brightness is the same gesture as a light being switched on
-   * — which is the room's own language, and costs nothing but a filter that is thrown away
-   * when the poster is. Never fully dark: at zero it is a dim room, not an absent one. */
-  filter: brightness(calc(0.72 + var(--load, 0) * 0.28)) saturate(calc(0.8 + var(--load, 0) * 0.2));
-  transition: opacity 700ms cubic-bezier(0.33, 0, 0.2, 1), filter 400ms linear;
+  /* No load-warm filter and no fade. Both belonged to the role this image no longer has:
+   * it warmed up as the splats downloaded and then cross-faded to the canvas. It is now only
+   * ever the room itself — no WebGL2, or no scripting — where dimming it to 0.72 and waiting
+   * for a `--load` that will never be written would leave the fallback permanently dark. */
+
 }
 
 /* **The other three copies of `fitZoom` are in TypeScript; this is the fourth and it has to
@@ -222,14 +240,6 @@
   }
 }
 
-/* The handover. Duration must stay in step with POSTER_FADE_MS in Room.tsx, which is how
- * long the element remains mounted after this begins. */
-.room__still--gone {
-  opacity: 0;
-  /* Nothing left to warm: the canvas underneath is the real thing, at full strength, and
-   * fading a filtered copy over it would read as a brightness pop at the seam. */
-  filter: none;
-}
 
 /* A line of light along the floor of the frame. Not a spinner: a spinner says "an
  * application is busy", and this is a room turning on. It is wordless on purpose — the
@@ -260,7 +270,7 @@
 
 /* The poster is fading; the bar has nothing left to say. Goes first, so the last thing on
  * screen is the room and not a full-width line under it. */
-.room__still--gone ~ .room__load { opacity: 0; }
+/* The load bar unmounts with the rest of the loading state; there is nothing to hide. */
 
 /* ---- the title card -------------------------------------------------------
  * Who this is, and what the room is for, over the wait that already exists.

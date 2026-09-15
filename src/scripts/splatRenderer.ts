@@ -1066,6 +1066,37 @@ export async function createSplatRenderer(
    */
   const MIN_FRAME_MS = 1000 / 60 - 3;
   const MOTION_EPS_PX = 0.4;
+  /**
+   * Redraw cadence while the weather is the only thing changing, and the reason it exists.
+   *
+   * **The weather costs almost nothing to draw and a great deal to ask for.** Measured on
+   * Alex's machine: the particle pass itself is +0.23ms on a 14.12ms frame (+1.6%), including
+   * the extra draw call. But a frame the camera did not move in used to be *skipped*, and
+   * snow makes every frame different, so `weather.active` turned a 14% skip rate into 0% and
+   * pushed drawn frames from 51/s to 57/s. The room is already GPU-bound at rest — 14.12ms
+   * median against a 16.67ms vsync budget, p95 19.13ms — so those extra full 1.18M-splat
+   * renders took utilisation from 72% to 82% and dropped rAF itself from 59.8 to 57.0/s.
+   * Missing vsync is what a visitor actually feels, and it is not what the snow costs, it is
+   * what the snow *prevents*.
+   *
+   * 48fps: measured against the flakes rather than picked. Snow crosses the frame at ~284
+   * device px/s and a flake is ~12px across, so at 48 it advances half its own diameter per
+   * frame, which on a soft low-contrast blob still reads as falling. At 30 it advances 0.8 of
+   * a diameter and reads as stepping. Below ~45 is where to expect trouble.
+   *
+   * **It applies only at rest.** A push is the site's signature motion and must stay at the
+   * display's rate; see `BUSY_PX`.
+   */
+  const WEATHER_FRAME_MS = 1000 / 48 - 3;
+  /**
+   * Above this, the camera is doing something deliberate — a push, or a fast pointer sweep —
+   * rather than drifting, and the frame cap goes back to the display's.
+   *
+   * Idle drift peaks near 0.6px of motion per frame (0.05m over a 21s period); a push covers
+   * ~2.5m in under a second, which is ~80px per frame. The two are two orders apart, so this
+   * separates them with nothing to tune.
+   */
+  const BUSY_PX = 3;
   let lastDrawAt = 0;
   const drawnEye: [number, number, number] = [0, 0, 0];
 
@@ -1326,13 +1357,15 @@ export async function createSplatRenderer(
 
     const movedPx = Math.hypot(camera.eye[0] - drawnEye[0], camera.eye[1] - drawnEye[1],
                                camera.eye[2] - drawnEye[2]) * (m.fx * s) / m.nearZ;
-    // Weather counts as motion, not as dirt. `dirty` bypasses the frame cap for a one-off
-    // change that must land now; falling snow is continuous and still wants the 60fps ceiling
-    // — treating it as dirty would uncap the loop to the display's rate on a 120Hz panel.
-    // The room's ambient drift means this rarely decides anything: it matters under
-    // prefers-reduced-motion, where the camera is still — and there the weather is off.
+    // Weather counts as motion, not as dirt: `dirty` bypasses the frame cap for a one-off
+    // change that must land now, and falling snow is continuous.
+    //
+    // The cap it gets is its own, and only while the camera is at rest — see
+    // WEATHER_FRAME_MS. With no weather this is byte-for-byte the old behaviour, so summer is
+    // untouched.
+    const gate = weather.active && movedPx < BUSY_PX ? WEATHER_FRAME_MS : MIN_FRAME_MS;
     if (!dirty
-        && ((movedPx < MOTION_EPS_PX && !weather.active) || now - lastDrawAt < MIN_FRAME_MS)) {
+        && ((movedPx < MOTION_EPS_PX && !weather.active) || now - lastDrawAt < gate)) {
       return;
     }
     lastDrawAt = now;
