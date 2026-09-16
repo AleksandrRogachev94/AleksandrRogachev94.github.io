@@ -828,6 +828,32 @@ export async function createSplatRenderer(
   gl.bindVertexArray(vao);
   const cornerBuf = gl.createBuffer()!;
   gl.bindBuffer(gl.ARRAY_BUFFER, cornerBuf);
+  // **Four corners, and the obvious cut to three was measured and reverted.**
+  //
+  // The fragment shader discards on `dot(vQuad, vQuad) > 1.0` — the drawn region is the unit
+  // disc in the covariance's eigenbasis and does not care what polygon delivered the
+  // fragments. So the smallest triangle around that disc ((0,2), (+/-sqrt(3),-1)) renders a
+  // provably identical picture with 25% fewer vertex invocations, which on a draw of 1.2M
+  // instances that rebuilds a quaternion, a rotation, a covariance and its projection *per
+  // invocation* looked like a quarter off the dominant cost for two lines.
+  //
+  // It shipped a visibly worse room. Same picture, more stutter, on the machine that was
+  // already struggling.
+  //
+  // The reason the prediction failed is that "fragments are free here" did not mean what it
+  // was taken to mean. It came from the pixel-budget experiment — 3.2M px down to 0.8M moved
+  // the frame time not at all — but that scales every primitive down *together*, which tests
+  // shading cost and says nothing about per-primitive cost. The triangle does the opposite of
+  // scaling down: it holds the splat's size and inflates its bounding box from 2x2 to
+  // ~3.46x3, and on a tile-based deferred GPU binning is per primitive against the tiles its
+  // bounds touch. 1.2M primitives each touching ~2.6x the tiles is a large bill on an axis
+  // the resolution test never looked at.
+  //
+  // What that leaves is a useful narrowing rather than a dead end: the room behaves like it
+  // is primitive-bound, not vertex-ALU-bound and not fill-bound. Fewer splats would help on
+  // that axis. Hoisting the per-splat maths out of the four corners — the transform-feedback
+  // idea — now looks much weaker, because it removes invocations while leaving the primitive
+  // count exactly where it is.
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
   const locCorner = gl.getAttribLocation(program, 'aCorner');
   gl.enableVertexAttribArray(locCorner);
@@ -881,6 +907,34 @@ export async function createSplatRenderer(
       const d15 = (bytes[i * 4 + 2] * 128 + bytes[i * 4 + 3] - 128) / 32767;
       depth[i] = 1 / (m.dispLo + d15 * (m.dispHi - m.dispLo));
     }
+
+    // **Both layers are drawn, and dropping the coincident half was tried and reverted.**
+    //
+    // Measured cell by cell against layer A's disparity in the same cell, SHARP's second
+    // layer is overwhelmingly not hidden geometry: median separation 0.024% of the disparity
+    // range, 72.6% of it within 0.05% and 93.3% within 0.2%. Only the tail beyond that is the
+    // ribbon at silhouettes — the same 2.23% docs/SCENE-SPLAT measured as genuinely behind
+    // the front surface, reached from the other direction. Since parallax separation in
+    // disparity units is `fx * b * eps * (dispHi - dispLo)` and carries no depth term, one
+    // epsilon bounds the whole room, and at the camera's entire 15.2cm excursion an epsilon
+    // holding every pruned splat under half a master pixel still removed 45.6% of the draw.
+    //
+    // The geometry argument was sound and the conclusion was wrong. Those splats cannot be
+    // *disoccluded*, but they are not idle: black spots across the whole frame and
+    // half-transparent objects, immediately and everywhere. Two coincident splats accumulate
+    // more alpha than one, so the second layer is doing **coverage**, not occlusion — it is
+    // half of what makes the field tile, and the bake's "accumulated alpha >= 0.9 on 100.00%
+    // of pixels" was measured with both present. Remove it and the clear colour comes through
+    // between the splats of the layer that is left.
+    //
+    // This is also why the bake's "no coverage fit" decision holds: the field tiles because
+    // there are two layers of it, not because one layer is dense enough. The two facts are
+    // the same fact.
+    //
+    // What that leaves for anyone trying this again: the primitive count is real and cannot
+    // be cut by dropping splats. It could only be cut by *merging* a coincident pair into one
+    // splat carrying the pair's composited colour and alpha — which keeps the coverage that
+    // is doing the work and is a bake-time change, not a load-time one.
     const out = new Uint32Array(N);
     // 16-bit counting sort on view depth, far to near. O(n), ~15ms for 1.2M.
     const BUCKETS = 65536;
