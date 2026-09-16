@@ -1159,13 +1159,15 @@ export async function createSplatRenderer(
    * `swap()` whenever a variant change is under way, and applies immediately when one is not
    * (the day/night toggle landing on a variant already up, and the first call at mount).
    *
-   * **"Under way" starts at the click, not at the dip.** `setVariant` is async and only
-   * raises `fading` once it has whatever the variant was missing, which on a first switch to
-   * a season is a colour raster plus ~8.5MB of geometry. Room.tsx calls `setWeather` on the
-   * same tick as `setVariant`, so gating on `fading` alone let the new weather start
-   * immediately and run through the entire fetch *and* the fade down — visible as snow in an
-   * autumn room — while the cached path, where `setVariant` never awaits, behaved correctly.
-   * `variantPending` is raised synchronously instead, so both paths defer.
+   * **"Under way" starts at the click, not at the dip**, and `variantPending` rather than
+   * `fading` is what says so. `fading` is now raised on the click too, so the two agree on
+   * the ordinary path — but not on the two that never animate (a stopped renderer, reduced
+   * motion), where `setVariant` holds `fading` back until it has whatever the variant was
+   * missing, which on a first switch to a season is a colour raster plus ~8.5MB of geometry.
+   * Room.tsx calls `setWeather` on the same tick as `setVariant`, so gating on `fading`
+   * alone would let the new weather start immediately and run through the entire fetch on
+   * exactly those paths — visible as snow in an autumn room. `variantPending` is raised
+   * synchronously in every case, so all of them defer.
    */
   let pendingLook: WeatherLook | null = null;
   let lookPending = false;
@@ -1190,6 +1192,26 @@ export async function createSplatRenderer(
   let variantPending = false;
   /** Whether the swap at the bottom of the dip has happened yet. */
   let swapped = false;
+  /**
+   * Whether the target's colour — and its cloud, if it brought one — are uploaded and the
+   * swap may go ahead.
+   *
+   * **This is what the dip waits on, and it is why the dip no longer waits on the fetch.**
+   * The order used to be fetch-then-dip: `setVariant` awaited up to ~11MB and only then
+   * raised `fading`. Everything about the transition itself was right and it still read as
+   * broken, because the first thing that happens after a click has to be caused by the
+   * click. A season switch left the room sitting in the old season for as long as the
+   * network took, and the one moving part that could have said "heard you" was deliberately
+   * held back until it was no longer needed.
+   *
+   * So the dip starts on the click and stops at the bottom, where the room is black and
+   * there is nothing to look at anyway. A wait the visitor is already looking away from
+   * costs nothing; the same wait in front of an unchanged room costs the whole gesture.
+   * The cached path — the day/night toggle inside a season, and every repeat — sets this
+   * before the first frame of the dip is drawn, so it never holds and is byte-identical to
+   * what shipped before.
+   */
+  let fadeReady = false;
 
   /**
    * Which clouds stay resident, most recently used last.
@@ -1235,13 +1257,24 @@ export async function createSplatRenderer(
 
   function stepDip(dt: number) {
     if (!fading) return;
+    // **The hold**: down at the bottom with the assets not yet in hand, the picture is black
+    // and is going to stay black, so there is nothing to advance and nothing to draw. Bailing
+    // before `dirty` rather than after is the whole point — a full-cost frame is 1.2M splats,
+    // and rendering all of them at `uDim` 0 would put a black screen's worth of GPU work per
+    // frame against the very fetch the hold is waiting for. The loop keeps ticking either way
+    // (`frame` reschedules unconditionally), so the frame after `fadeReady` flips picks this
+    // straight back up with nothing to wake.
+    if (dip >= 0.5 && !swapped && !fadeReady) return;
     // The frame loop skips a draw when the eye has not moved far enough to matter. This
     // changes the picture without moving the camera at all, so it has to say so itself —
     // otherwise a season change made while the room is still would land one frame at a time,
     // whenever ambient drift happened to cross the threshold.
     dirty = true;
     dip = Math.min(1, dip + dt / FADE_MS);
-    if (dip >= 0.5 && !swapped) swap();
+    // Clamped to the bottom rather than allowed to run on: the frame that crosses 0.5 without
+    // `fadeReady` is the one that paints the black the hold sits in, and if it were left at
+    // 0.62 the fade back up would start from a room that is already faintly visible.
+    if (dip >= 0.5 && !swapped) { if (fadeReady) swap(); else dip = 0.5; }
     // **A V, and the polarity is the whole effect: 1 at both ends, 0 at the bottom.** This
     // read `dip * 2` / `(1 - dip) * 2` for one release, which is the same triangle upside
     // down — the room blacked out on the first frame, brightened to full, hard-cut to the
@@ -1258,7 +1291,6 @@ export async function createSplatRenderer(
     const lit = dip < 0.5 ? 1 - dip * 2 : dip * 2 - 1;
     const eased = lit * lit * (3 - 2 * lit);
     dimNow = eased;
-    gl!.uniform1f(u.uDim, eased);
     // The background crosses over once, linearly, across the whole dip, so the fade back up
     // lands on the new season's colour — but it is *also* dimmed by the same eased curve, so
     // the two meet at black in the middle rather than at some average of two room colours.
@@ -1274,7 +1306,6 @@ export async function createSplatRenderer(
     dip = 0;
     setClear(shown, shown, 0);
     dimNow = 1;
-    gl!.uniform1f(u.uDim, 1);
   }
 
   /**
@@ -1283,10 +1314,28 @@ export async function createSplatRenderer(
    * owns it. The deferred weather applies here rather than being swallowed: the lighting
    * degrades to whatever is already on screen, but a look that needs no fetch should still
    * land, which is the same explicit degradation as the rest of this file.
+   *
+   * **It also has to turn the dip around, and that is new.** While the dip waited on the
+   * fetch, a failure meant a room that simply never changed; now the room is already black
+   * and holding, so the same failure would black it out permanently. Retargeting at the
+   * lighting that is still up and releasing the hold makes the dip come back the way it
+   * went down and land on the room the visitor already had — a switch that visibly did
+   * nothing, which is the honest report. `fadeFrom` is `shown` too, so the clear colour
+   * crossfades between one colour and itself and only the V is left.
    */
   function abandonVariant(target: string | null) {
     if (fadeTarget !== target) return;
     variantPending = false;
+    // The LRU slot was claimed before the fetch, to stop a concurrent switch evicting the
+    // cloud this one was heading for. Nothing arrived, so release it rather than leave a key
+    // naming no cloud holding one of three slots against the next switch.
+    if (target !== null && !clouds.has(target)) {
+      const at = lru.indexOf(target);
+      if (at >= 0) lru.splice(at, 1);
+    }
+    fadeTarget = shown;
+    fadeCloud = cloudA;
+    fadeReady = true;
     if (!fading) applyWeather();
   }
 
@@ -1298,66 +1347,96 @@ export async function createSplatRenderer(
     // and the answer to "is a change under way" has to already be yes. See `pendingLook`.
     variantPending = true;
 
-    if (!colorTex.has(target)) {
-      // Lazily fetched, because most visitors never touch the control. `?v=` is the bake's
-      // content hash, the same one the other rasters carry.
-      // The base art is `-splat-color`, a variant is `-splat-color-<name>`. Unreachable for
-      // null today — the base raster is always loaded at construction — but the URL has to
-      // be right or the day case becomes `color-null.webp` the first time that changes.
-      const suffix = target === null ? '' : `-${target}`;
-      const res = await fetch(`${assetPrefix}-splat-color${suffix}.webp${v}`);
-      // degrade to the lighting already on screen
-      if (!res.ok) { abandonVariant(target); return; }
-      const raster = await loadRaster(res);
-      if (!gl || fadeTarget !== target) { raster.close(); abandonVariant(target); return; }
-      colorTex.set(target, upload(gl, 1, raster));
-      raster.close();
-    }
-
-    // **And its geometry, when the variant brought its own.** A name absent from
-    // `variantGeom` is colour-only: it keeps whatever cloud is up, which is the original
-    // path and still the right one for a master that really did only change the light.
-    const ownGeom = target === null || (m.variantGeom?.includes(target) ?? false);
-    const wantCloud = ownGeom ? target : cloudA;
-    // Claimed before the fetch, not after: `touchCloud` refuses to evict the cloud a morph
-    // is heading for, and the fetch below is the window in which another switch could
-    // otherwise retire it.
-    fadeCloud = wantCloud;
-    if (ownGeom) touchCloud(target);
-    if (ownGeom && !clouds.has(target)) {
-      const suf = target === null ? '' : `-${target}`;
-      const res = await Promise.all(['geom', 'shape', 'quat'].map(
-        (t) => fetch(`${assetPrefix}-splat-${t}${suf}.bin${v}`)));
-      // degrade to the lighting already on screen
-      if (!res.every((r) => r.ok)) { abandonVariant(target); return; }
-      const [gR, sR, qR] = await Promise.all(res.map((r) => loadRaster(r, undefined, true)));
-      if (!gl || fadeTarget !== target) {
-        gR.close(); sR.close(); qR.close(); abandonVariant(target); return;
-      }
-      clouds.set(target, {
-        // Uploaded through unit 0 as scratch, never left bound there: `bindCloud` is what
-        // decides which cloud the geometry units actually hold, and it runs at the swap.
-        geom: upload(gl, 0, gR), shape: upload(gl, 0, sR), quat: upload(gl, 0, qR),
-        order: new Uint32Array(0),
-        split: 0,
-      });
-      const loaded = clouds.get(target)!;
-      ({ order: loaded.order, split: loaded.split } = ingestGeom(
-        loaded.geom, gR.width, gR.height,
-        target === null ? m.geomAdler32 : m.variantAdler32?.[target], target ?? 'day'));
-      gR.close(); sR.close(); qR.close();
-    }
-
-    // Nothing is bound to the target yet: the swap happens at the bottom of the dip, where
-    // there is nothing on screen for it to happen to.
+    // **The dip begins here, not after the fetch.** See `fadeReady` for why. Everything in
+    // this block is synchronous and none of it can fail, so the room starts answering on the
+    // same tick as the click no matter what the network then does.
+    //
+    // A stopped renderer has no frame to ease in — a hidden tab, a mounted focus state — and
+    // reduced motion is owed a cut rather than a fade. Neither may animate, so neither starts
+    // a dip at all; both land on the new lighting at the end, which is where they always did.
+    const animate = running && !motionQuery.matches;
     fadeFrom = shown;
-    dip = 0;
+    fadeReady = false;
     swapped = false;
-    fading = true;
-    // A stopped renderer has no frame to ease in — a hidden tab, a mounted focus state, or
-    // reduced motion. Land on the new lighting immediately so it is correct whenever the
-    // room is next looked at.
-    if (!running || motionQuery.matches) settleDip();
+    if (animate) {
+      // Where to resume from, given the dip may already be running. Mirroring a *rising* dip
+      // about its bottom (`lit` is `dip * 2 - 1` above 0.5, so `1 - dip` is the descending
+      // point at the same brightness) turns it around from exactly the brightness on screen;
+      // restarting at 0 would snap a half-recovered room back to full first. A dip still on
+      // its way down just keeps going from where it is.
+      if (fading && dip > 0.5) dip = 1 - dip;
+      else if (!fading) dip = 0;
+      fading = true;
+      dirty = true;
+    }
+
+    try {
+      if (!colorTex.has(target)) {
+        // Lazily fetched, because most visitors never touch the control. `?v=` is the bake's
+        // content hash, the same one the other rasters carry.
+        // The base art is `-splat-color`, a variant is `-splat-color-<name>`. Unreachable for
+        // null today — the base raster is always loaded at construction — but the URL has to
+        // be right or the day case becomes `color-null.webp` the first time that changes.
+        const suffix = target === null ? '' : `-${target}`;
+        const res = await fetch(`${assetPrefix}-splat-color${suffix}.webp${v}`);
+        // degrade to the lighting already on screen
+        if (!res.ok) { abandonVariant(target); return; }
+        const raster = await loadRaster(res);
+        if (!gl || fadeTarget !== target) { raster.close(); abandonVariant(target); return; }
+        colorTex.set(target, upload(gl, 1, raster));
+        raster.close();
+      }
+
+      // **And its geometry, when the variant brought its own.** A name absent from
+      // `variantGeom` is colour-only: it keeps whatever cloud is up, which is the original
+      // path and still the right one for a master that really did only change the light.
+      const ownGeom = target === null || (m.variantGeom?.includes(target) ?? false);
+      const wantCloud = ownGeom ? target : cloudA;
+      // Claimed before the fetch, not after: `touchCloud` refuses to evict the cloud a morph
+      // is heading for, and the fetch below is the window in which another switch could
+      // otherwise retire it.
+      fadeCloud = wantCloud;
+      if (ownGeom) touchCloud(target);
+      if (ownGeom && !clouds.has(target)) {
+        const suf = target === null ? '' : `-${target}`;
+        const res = await Promise.all(['geom', 'shape', 'quat'].map(
+          (t) => fetch(`${assetPrefix}-splat-${t}${suf}.bin${v}`)));
+        // degrade to the lighting already on screen
+        if (!res.every((r) => r.ok)) { abandonVariant(target); return; }
+        const [gR, sR, qR] = await Promise.all(res.map((r) => loadRaster(r, undefined, true)));
+        if (!gl || fadeTarget !== target) {
+          gR.close(); sR.close(); qR.close(); abandonVariant(target); return;
+        }
+        clouds.set(target, {
+          // Uploaded through unit 0 as scratch, never left bound there: `bindCloud` is what
+          // decides which cloud the geometry units actually hold, and it runs at the swap.
+          geom: upload(gl, 0, gR), shape: upload(gl, 0, sR), quat: upload(gl, 0, qR),
+          order: new Uint32Array(0),
+          split: 0,
+        });
+        const loaded = clouds.get(target)!;
+        ({ order: loaded.order, split: loaded.split } = ingestGeom(
+          loaded.geom, gR.width, gR.height,
+          target === null ? m.geomAdler32 : m.variantAdler32?.[target], target ?? 'day'));
+        gR.close(); sR.close(); qR.close();
+      }
+
+    } catch {
+      // A rejected `fetch` — DNS, a dropped connection, an aborted request — as opposed to
+      // the `res.ok` checks above, which catch a server that answered with a 404. Both end
+      // the same way, and this one has to be caught rather than left to reject: the dip is
+      // down and holding, and an unhandled rejection would leave it there.
+      abandonVariant(target);
+      return;
+    }
+
+    // Nothing is bound to the target yet: the swap still happens at the bottom of the dip,
+    // where there is nothing on screen for it to happen to. Releasing the hold is all that is
+    // left — `stepDip` picks it up on the next frame and carries on through the swap.
+    fadeReady = true;
+    // Land on the new lighting immediately on the paths that never started a dip, so it is
+    // correct whenever the room is next looked at.
+    if (!animate) { fading = true; settleDip(); }
   }
 
   function frame(now: number) {
@@ -1413,6 +1492,20 @@ export async function createSplatRenderer(
     lastDrawAt = now;
     dirty = false;
     drawnEye[0] = camera.eye[0]; drawnEye[1] = camera.eye[1]; drawnEye[2] = camera.eye[2];
+    // **The program first, and every uniform after it.** `gl.uniform*` writes to whatever
+    // program is *current*, not to the one whose location was looked up — so these five calls
+    // sat above `useProgram` and wrote to whoever happened to be bound. For as long as this
+    // renderer was the only thing drawing, that was itself and the ordering was invisible.
+    // The weather pass ended that: it binds its own program (the note at the second draw
+    // below says so), so on every frame after a snowy or leafy one the room's focal, centre,
+    // viewport, view matrix and camera were written to the *weather's* program. WebGL answers
+    // that with INVALID_OPERATION and drops the write, which is not a crash and not a visible
+    // artifact — the uniforms simply kept the previous frame's values, and the room went
+    // subtly stale under a moving camera. Console errors on every frame of every season with
+    // weather in it were the only symptom.
+    gl!.useProgram(program);
+    gl!.bindVertexArray(vao);
+
     gl!.uniform2f(u.uFocal, m.fx * s, m.fx * s);
     gl!.uniform2f(u.uCenter, m.cx * s + (w - m.width * s) / 2, m.cy * s + (h - m.height * s) / 2);
     gl!.uniform2f(u.uViewport, w, h);
@@ -1420,8 +1513,14 @@ export async function createSplatRenderer(
     updateView();
     gl!.uniformMatrix3fv(u.uView, false, view);
     gl!.uniform3f(u.uCam, camera.eye[0], -camera.eye[1], -camera.eye[2]);
+    // **The dip's dimming is written here, not where it is computed.** Same rule: `stepDip`
+    // runs outside any `useProgram`, so setting it there wrote to whatever was bound and a
+    // season change could silently not dim at all. `dimNow` already existed to keep the
+    // weather in step with the same curve, so the value has a home and this is simply the one
+    // place allowed to hand it to GL.
+    gl!.uniform1f(u.uDim, dimNow);
 
-    // Re-establish everything this draw depends on, every frame.
+    // Re-establish everything else this draw depends on, every frame.
     //
     // It used to be set once at construction and assumed to survive, which is true only
     // while this renderer is the sole owner of the context. It is not guaranteed to be:
@@ -1434,9 +1533,8 @@ export async function createSplatRenderer(
     // `orderBuf` in its VAO — the wrong back-to-front order, which in an alpha-composited
     // splat field is not a crash but a wash: a soft, slightly wrong room with no error
     // anywhere. Ten calls a frame is nothing next to 1.2M instances, and it makes the
-    // renderer independent of whatever else has touched the context.
-    gl!.useProgram(program);
-    gl!.bindVertexArray(vao);
+    // renderer independent of whatever else has touched the context. The program and the VAO
+    // are bound above, because the uniforms could not wait for them.
     for (let i = 0; i < textures.length; i++) {
       gl!.activeTexture(gl!.TEXTURE0 + i);
       gl!.bindTexture(gl!.TEXTURE_2D, textures[i]);

@@ -384,7 +384,7 @@ canvas.room__canvas {
   margin: 0;
   font-size: clamp(0.8125rem, 1.4vw, 0.9375rem);
   line-height: 1.5;
-  color: var(--room-ink);
+  color: var(--load-ink);
   opacity: min(
     clamp(0, (var(--load, 0) - var(--from, 0)) * 40, 1),
     clamp(0, (var(--to, 1) - var(--load, 0)) * 40, 1)
@@ -403,7 +403,7 @@ canvas.room__canvas {
   font-size: clamp(0.6875rem, 1.1vw, 0.75rem);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
-  color: var(--room-ink-soft);
+  color: var(--load-ink-soft);
   /* It must not reserve a line that then jumps when the figure arrives. */
   min-height: 1.2em;
 }
@@ -492,6 +492,20 @@ canvas.room__canvas {
   /* Duration must stay in step with INTRO_FADE_MS in Room.tsx, which is how long the element
    * stays mounted after `--going` lands. */
   transition: opacity 450ms ease, transform 450ms ease;
+  /* Arrives with the room it is greeting. The card is mounted the moment the canvas is
+   * revealed (Room.tsx, `intro`), and the canvas takes 400ms to fade up — so without this it
+   * would snap to full over a room still arriving underneath it.
+   *
+   * **No fill mode, deliberately.** An animation's value outranks a transition's, so holding
+   * the final keyframe would pin `opacity` at 1 and `.room__intro--going` could never fade
+   * the card out — the exit would become a disappearance. Letting the animation stop owning
+   * the property hands it back to the rules above, which is exactly what the exit needs. */
+  animation: room-intro-in 450ms ease-out;
+}
+
+@keyframes room-intro-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
 }
 
 /* Leaving. It lifts very slightly as it goes — the same direction the camera travels on a
@@ -525,12 +539,21 @@ canvas.room__canvas {
  *
  * It fades in on its own: it appears six seconds into a wait, and something that simply
  * blinks into existence beside two lines that were already there reads as an error. */
-.room__intro-wait {
-  margin-top: 10px;
-  /* Its own size step down, so it is visibly subordinate even where the two lines wrap to
-   * similar widths. */
+/* The stall line, at the foot of the loading screen. Was `.room__intro-wait`, in the title
+ * card, until the card stopped being shown during the load — see `intro` in Room.tsx.
+ *
+ * `--load-ink-soft` rather than a colour: it sits directly on the mat with no scrim under it,
+ * exactly as the megabyte figure does, so it has to follow the ground into night for the same
+ * reason and by the same mechanism. In the card it could name `--room-ink-over-soft` outright
+ * because the card brought its own radial scrim; out here there is nothing behind it. */
+.room__load-wait {
+  grid-area: 3 / 1;
+  margin: 10px 0 0;
+  /* Its own size step down from the figure above, so it reads as subordinate to the numbers
+   * rather than as another one of them. */
   font-size: clamp(0.75rem, 1.2vw, 0.875rem);
-  color: var(--room-ink-over-soft);
+  line-height: 1.5;
+  color: var(--load-ink-soft);
   opacity: 0.82;
   animation: room-wait-in 500ms ease-out both;
 }
@@ -543,10 +566,11 @@ canvas.room__canvas {
 @media (prefers-reduced-motion: reduce) {
   /* Straight to its resting state. The line is information and must still arrive; only the
    * movement goes. */
-  .room__intro-wait { animation: none; }
+  .room__load-wait { animation: none; }
   /* Room.tsx already collapses both timers to zero here, so the card is never shown at all.
-   * This is belt and braces: no transition means nothing can be caught mid-fade. */
-  .room__intro { transition: none; }
+   * This is belt and braces: no transition and no arrival means nothing can be caught
+   * mid-fade in either direction. */
+  .room__intro { transition: none; animation: none; }
 }
 
 /* Once a focus panel is fully open (not mid-push/pull, when the canvas still has to draw),
@@ -582,6 +606,21 @@ canvas.room__canvas {
   inset: 0;
   /* Decoration only. Every affordance in the room is a real button in the layer above. */
   pointer-events: none;
+  /* Arrives with the room. Room.tsx mounts this layer only once the canvas is revealed, and
+   * the canvas fades up over the same 400ms (`canvas.room__canvas`) — so without this the
+   * lights would snap to full over a room still at zero opacity, which is a shorter version
+   * of the bug the mount gate exists to fix.
+   *
+   * An animation rather than a transition, because the element is new on the frame it needs
+   * to fade: there is no previous value for a transition to run from. Not disabled under
+   * reduced motion, deliberately — it is the same opacity ramp the canvas itself keeps
+   * there, and matching it is what stops the two from disagreeing. */
+  animation: ambient-up 400ms ease-out;
+}
+
+@keyframes ambient-up {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Gone for the whole gesture, and it takes **two gates** to say that, because neither
@@ -1207,6 +1246,12 @@ canvas.room__canvas {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  /* Arrives with the room, on the same ramp as `.ambient` and for the same reason: Room.tsx
+   * holds these back until the canvas is revealed, and the canvas takes 400ms to fade up. A
+   * standby LED snapping to full over a room still arriving is a smaller version of the bug
+   * the mount gate fixes. Reusing `ambient-up` rather than declaring a second identical
+   * keyframe — one ramp, so the two layers cannot drift apart. */
+  animation: ambient-up 400ms ease-out;
 }
 
 .control {
@@ -2549,17 +2594,63 @@ canvas.room__canvas {
   .ambient__fx--monitor-glow .glow.glow--redraw { animation: none; opacity: 0; }
 }
 
-/* Set from React alongside the renderer's variant, so one state drives both. Absent until
- * the visitor's clock has been read, which is what the fallback in `--mat` is for.
+/* Set from React alongside the renderer's variant, so one state drives both.
+ *
+ * **Seeded on `:root` before first paint, and handed over on hydration.** The room's own
+ * attributes cannot exist until the island mounts, so for the length of the download the mat
+ * fell back to `--room-bg` — warm paper — and then flipped to plum the moment React read the
+ * clock. A visitor arriving at night watched the page change colour under a loading screen
+ * that was already running, which reads as a bug because it is one. The server cannot know
+ * the visitor's clock, so an inline script in index.astro stamps the same two attributes on
+ * `<html>` before anything paints.
+ *
+ * `:not([data-<axis>])` is the handover, and it is what keeps one source of truth. The seed
+ * describes the clock at load; `.room`'s attributes describe the room *now*, which the two
+ * controls in the corner can change. Without the guard a stale `:root='night'` would outrank
+ * `.room='day'` on specificity and the mat would stay dark after a click — so each seed rule
+ * stops matching the instant the room states its own value, and every rule below is back to
+ * being the only one in play.
  *
  * Night wins over season because it is the larger change: a winter night and a summer night
  * are both simply dark, which is why they share one mat and why `variantFor` gives fall and
  * summer one raster after sunset. Winter's daytime mat is the one seasonal exception worth
  * having — a snow-lit room sits behind a cooler, paler frame than a sunlit one, and the mat is
  * only ever visible as the band above and below the art on a viewport too tall to fill. */
+:root[data-season='winter'] .room:not([data-season]),
 .room[data-season='winter'] { --mat: #dfe3e8; }
+:root[data-season='fall'] .room:not([data-season]),
 .room[data-season='fall'] { --mat: #e9dccb; }
+:root[data-daylight='night'] .room:not([data-daylight]),
 .room[data-daylight='night'] { --mat: var(--room-bg-night); }
+
+/* **The load's ink follows its ground, and until it did the night load was unreadable.**
+ *
+ * The mat is paper by day and plum at night, and the loading screen writes directly onto it
+ * — there is no scrim under the phase lines or the megabyte figure the way there is under
+ * the title card. They were `--room-ink` and `--room-ink-soft`, which are the document's
+ * inks: dark, correct on `--room-bg`, and all but invisible on `#301d23`. A visitor arriving
+ * after seven in the evening got a dial, a progress rule and two lines of text they could
+ * not read.
+ *
+ * The tokens to switch to already exist and already say what they are for: `--room-ink-over`
+ * is the warm white the title card uses over exactly this ground. So the fix is a pair of
+ * indirections that the variant re-points, rather than a second set of colours — the loading
+ * screen asks for "ink on whatever the mat is" and the mat decides.
+ *
+ * Declared on `.room` rather than on the loader, because the mat is declared there too and
+ * the two must never be resolved from different elements. Scoped to `.room` rather than
+ * redefining `--room-ink` itself, because the document below this is on `--room-bg` in every
+ * variant — the page does not have a night mode, the *room* does, and flipping the shared
+ * token would turn the prose white on cream. */
+.room {
+  --load-ink: var(--room-ink);
+  --load-ink-soft: var(--room-ink-soft);
+}
+:root[data-daylight='night'] .room:not([data-daylight]),
+.room[data-daylight='night'] {
+  --load-ink: var(--room-ink-over);
+  --load-ink-soft: var(--room-ink-over-soft);
+}
 
 /* ---- the day/night switch ------------------------------------------------
  *
@@ -2839,3 +2930,4 @@ canvas.room__canvas {
   .season__pick { transition: none; }
   .season__menu { animation: none; }
 }
+

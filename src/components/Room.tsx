@@ -479,10 +479,10 @@ export default function Room() {
   // ---- the day/night switch ------------------------------------------------
   //
   // A room control: it changes the light in place and never touches the camera (rule 5). The
-  // renderer owns the transition — `setVariant` fetches whatever this variant is missing and
-  // then dips: fade down, swap colour *and* geometry at the bottom, fade back up — so all this
-  // does is decide which variant and record whether that was a disagreement with the clock
-  // worth keeping.
+  // renderer owns the transition — `setVariant` dips immediately and swaps colour *and*
+  // geometry at the bottom, holding there for whatever the variant was missing rather than
+  // waiting on the fetch before it starts — so all this does is decide which variant and
+  // record whether that was a disagreement with the clock worth keeping.
   //
   // The state is set optimistically rather than waiting on the fetch. The dip is the feedback,
   // and a switch that stays in its old position for as long as ~11MB takes reads as broken; if
@@ -719,8 +719,21 @@ export default function Room() {
    */
   const [intro, setIntro] = useState(false);
   useEffect(() => {
+    // **Not at mount — when the room is actually there.** The card used to appear a beat into
+    // the load and sit through the whole download, which put two pieces of centred prose on
+    // screen at once: the loading screen saying what is arriving, and a title card naming the
+    // site over a room that had not arrived. Two voices for one wait, and the card's own
+    // instruction — click the objects in the room — was the less true of them, because there
+    // were no objects yet.
+    //
+    // So the loading screen owns the wait and the card owns the arrival. It greets a room
+    // that exists, which is the only moment its sentence is a fact.
+    //
+    // `!webgl` is the still-image path, where there is nothing to wait for and `drawable`
+    // never comes; the card is over the room from the start because the still *is* the room.
+    if (!drawable && webgl) return;
     setIntro(true);
-  }, []);
+  }, [drawable, webgl]);
   /**
    * Whether the card has *started* leaving, as distinct from being gone. Two flags because
    * it fades rather than vanishing, and a fade needs the element to still be mounted while
@@ -886,6 +899,7 @@ export default function Room() {
         />
       )}
 
+
       {/* **The still is now the fallback and nothing else.** It used to double as the cover
           over the splat download, which is what put a flat image on screen at the same moment
           as a moving camera — see `revealed`. On this path there is no camera to disagree with
@@ -991,6 +1005,30 @@ export default function Room() {
                 fills the empty state, the callback fills the real one, and neither can erase
                 the other. */}
             <p className="room__load-bytes" ref={bytesRef} />
+            {/* Only when the room has actually gone quiet — see `STALL_MS`. It says what is
+                happening rather than apologising for it: a visitor looking at a dial that is
+                not moving cannot tell a thin connection from a dead page, and this is the one
+                fact that separates them.
+
+                **It lives here now, with the rest of the load.** It used to sit in the title
+                card, which was the room's voice during the wait back when the card was shown
+                during the wait — it is not any more (see `intro`), and a stall line is about
+                the download, so it belongs to the thing reporting the download. Legibility
+                came along with it: `--load-ink-soft` is the same indirection the megabyte
+                figure above uses, so this follows the mat into night exactly as that does.
+
+                **It inherits `.room__load`'s `aria-hidden`, and that is the right answer
+                rather than an omission carried over.** It is the one line here that is not
+                also in the document below, so the question is real — but a screen reader is
+                reading that document, which is server-rendered and complete, and nothing it
+                conveys is waiting on these 11MB. There is no wait to announce. A live region
+                firing "still loading" into the middle of the prose would interrupt a visitor
+                to describe a delay they are not experiencing. */}
+            {stalled && (
+              <p className="room__load-wait">
+                Still loading &mdash; the room is a 3D scene, and this connection is slow.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -1013,31 +1051,28 @@ export default function Room() {
           <p className="room__intro-line">
             Click the objects in the room &mdash; each one goes somewhere.
           </p>
-          {/* Only when the room has actually gone quiet — see `STALL_MS`. It says what is
-              happening rather than apologising for it: a visitor looking at a warm
-              rectangle cannot tell a thin connection from a dead page, and this is the one
-              fact that separates them. It lives in the card because the card has already
-              solved legibility over a ground that is paper by day and plum at night, and
-              because the card is the room's voice during the wait.
-
-              **It inherits the card's `aria-hidden`, and that is the right answer rather
-              than an omission carried over.** It is the one line here that is not also in
-              the document below, so the question is real — but a screen reader is reading
-              that document, which is server-rendered and complete, and nothing it conveys
-              is waiting on these 11MB. There is no wait to announce. A live region firing
-              "still loading" into the middle of the prose would interrupt a visitor to
-              describe a delay they are not experiencing. */}
-          {stalled && (
-            <p className="room__intro-line room__intro-wait">
-              Still loading &mdash; the room is a 3D scene, and this connection is slow.
-            </p>
-          )}
         </div>
       )}
 
       {/* Scenery, below the hotspot layer in source order because the affordance must
-          always win: a wake and a focus ring draw over ambient light, never under it. */}
-      <Ambient view={view} aspect={aspect} />
+          always win: a wake and a focus ring draw over ambient light, never under it.
+
+          **Not mounted until the room is on screen.** This layer is `position: absolute;
+          inset: 0` with no z-index and sits after `.room__load` in source order, so while
+          the download was running its blooms painted *over* the loading screen: a monitor's
+          glow, a feeder's lens and a rover's status light hanging in an empty frame, lighting
+          nothing, on top of the one surface that is supposed to be flat. Obvious at night,
+          where the ground is dark enough to show them, and always wrong — these are lights
+          cast by objects, and the objects are not there yet.
+
+          Fixing it by stacking order alone would only hide them, and they would still be
+          ~10 composited layers running keyframe animations against the decode. So they
+          arrive with the room they belong to.
+
+          `!webgl` is the other half: on that path the still image *is* the room (`revealed`
+          never flips, because there is no canvas to reveal), so the light belongs on it
+          immediately. */}
+      {(revealed || !webgl) && <Ambient view={view} aspect={aspect} />}
 
       {/* `inert`, not `aria-hidden`. While a focus panel is open this layer is behind an
           `aria-modal` dialog and must be unreachable — but `aria-hidden` on a container of
@@ -1065,9 +1100,22 @@ export default function Room() {
       {/* The second grammar, in its own layer (rule 5, data/controls.ts): these change
           something in place and never move the camera, so they are toggle buttons rather
           than links and they do not belong in the layer above. Same `inert` gate — a
-          control behind an open `aria-modal` panel has to be unreachable too. */}
+          control behind an open `aria-modal` panel has to be unreachable too.
+
+          **Not mounted until the room is, for the same reason the ambient layer is not.**
+          The difference from the hotspot layer above is the LED: a hotspot is invisible at
+          rest and only lights under hover or focus, but a control's standby light is always
+          on by design — RoomControl.tsx argues that the resting tell has to be a different
+          kind of object than the hover response, and that tell is a blinking light. Glued to
+          a record player that has not been drawn yet, it was a light breathing in an empty
+          frame over the loading screen.
+
+          It is also the right answer for the control itself, not just for the picture: this
+          toggles ambient audio in a room you have not arrived in. `audioOn` already starts
+          false on every load precisely so the LED cannot sit lit over a silent room and read
+          as a bug; showing the LED before the room has the same problem from the other end. */}
       <div className="controls" inert={busy || undefined}>
-        {CONTROLS.map((c) => {
+        {(revealed || !webgl) && CONTROLS.map((c) => {
           const box = boxes.get(c.id);
           return box ? (
             <RoomControlButton

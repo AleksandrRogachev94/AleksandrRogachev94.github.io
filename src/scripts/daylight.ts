@@ -21,8 +21,15 @@
 
 export type Daylight = 'day' | 'night';
 
-const NIGHT_FROM = 19;
-const NIGHT_UNTIL = 7;
+/**
+ * Exported because `index.astro` inlines a copy of the comparison below into the document
+ * head, to stamp the answer on `<html>` before the first paint — the island cannot run that
+ * early, and until it did the room's mat changed colour mid-load (see room.css, `--mat`).
+ * The *numbers* stay here and are interpolated into that script at build, so there is one
+ * place to change the boundary even though two places read it.
+ */
+export const NIGHT_FROM = 19;
+export const NIGHT_UNTIL = 7;
 
 /**
  * Night runs 19:00–07:00 by the visitor's own clock.

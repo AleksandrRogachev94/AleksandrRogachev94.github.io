@@ -15,9 +15,15 @@
 
 export type Season = 'summer' | 'fall' | 'winter';
 
-/** Month indices (0 = January). Winter wraps the year, so it is listed rather than ranged. */
-const WINTER_MONTHS = [11, 0, 1];
-const FALL_MONTHS = [8, 9, 10];
+/**
+ * Month indices (0 = January). Winter wraps the year, so it is listed rather than ranged.
+ *
+ * Exported for the same reason daylight.ts exports its hours: the pre-paint script in
+ * `index.astro` needs the boundaries before the island exists, and interpolating them keeps
+ * one definition rather than two that can drift.
+ */
+export const WINTER_MONTHS = [11, 0, 1];
+export const FALL_MONTHS = [8, 9, 10];
 
 /**
  * Meteorological seasons off the visitor's own clock: Dec–Feb winter, Sep–Nov fall, the rest
