@@ -201,14 +201,17 @@
  * (roomGeometry.ts), so it lands in register with what replaces it: the handover reads as
  * the picture gaining depth, not as a page finally loading. It doubles as the no-WebGL2
  * fallback, which is what it was built for originally. */
-/* The canvas comes up from nothing, having taken its start pose while it was hidden — so
- * what fades in is a room already in motion rather than one starting from a standstill.
+/* The canvas comes up from nothing, having taken its start pose while it was hidden — and it
+ * holds that pose, still, until this has finished. The establishing move starts after
+ * (Room.tsx, `REVEAL_MS`), so the handover is one thing happening: the room appearing. It
+ * used to be already swooping as it faded up, which made the arrival read as two events
+ * colliding rather than as a room being uncovered.
  *
  * An element selector, because `.room__still` carries `room__canvas` too and must not inherit
  * this — that one is the no-WebGL fallback and is simply present, never faded.
  *
- * The duration is owned here and has no counterpart in Room.tsx: the reveal is a class change
- * rather than a timer, so there is nothing for it to drift out of step with.
+ * The duration has a counterpart in Room.tsx now — `REVEAL_MS`, which is how long the camera
+ * is held — but nothing there drives the fade. This rule still owns it.
  *
  * Not `visibility` and not a `display` swap: the canvas has to keep drawing all the way
  * through, or there is no motion to fade up into. */
@@ -292,6 +295,22 @@ canvas.room__canvas {
   inset: 0;
   /* Over the canvas that is about to fade up, and decoration. */
   pointer-events: none;
+  /* Duration must stay in step with LOAD_FADE_MS in Room.tsx, which is how long the element
+   * stays mounted after `--going` lands. */
+  transition: opacity 260ms ease-out;
+}
+
+/* Leaving, as the room arrives underneath it.
+ *
+ * **Opacity and nothing else.** Everything else this screen could do on the way out — lift,
+ * scale, blur — would be the loader making an exit, and the loader is not a thing the
+ * visitor should notice ending. What they should notice is the room appearing. The dial and
+ * the words simply stop being there, and the picture coming up behind them is the event.
+ *
+ * It starts on the same commit that reveals the canvas (Room.tsx, `revealed`), so the two
+ * curves overlap: this one is shorter, so the words are clear before the room is solid. */
+.room__load--going {
+  opacity: 0;
 }
 
 /* The dial: an arc that fills with the bytes, and a sheen that turns regardless.

@@ -144,6 +144,30 @@ const INTRO_HOLD_MS = 2000;
 const INTRO_FADE_MS = 450;
 
 /**
+ * How long the canvas takes to fade up. Must match `canvas.room__canvas` in room.css.
+ *
+ * **Read here because the establishing move now waits for it.** The room used to be already
+ * swooping as it faded in, on the reasoning that a room arriving in motion is livelier than
+ * one starting from a standstill. True in isolation, and wrong about what the visitor is
+ * actually watching, which is a loading screen handing over: two things changing at once
+ * across that handover is a cut with a fade painted over it. Hold the camera, let the picture
+ * arrive, then move — one event at a time.
+ *
+ * The hold is spent on the rig's own clock (`playIntro`), not a `setTimeout` here, so it
+ * pauses with the rAF exactly as the move does.
+ */
+const REVEAL_MS = 400;
+
+/**
+ * How long the loading screen takes to leave. Must match `.room__load--going` in room.css.
+ *
+ * Shorter than `REVEAL_MS` on purpose: the two overlap, and leaving them equal puts the dial
+ * and the phase line at half strength over a room at half strength, which is the one frame of
+ * the handover that looks like a mistake. The words clear first and the room closes over them.
+ */
+const LOAD_FADE_MS = 260;
+
+/**
  * How long the room may go without receiving a single byte before it says so.
  *
  * **Measured against silence, not against elapsed time**, and the difference is the whole
@@ -762,10 +786,11 @@ export default function Room() {
    * back takes the line away again without needing a second mechanism.
    */
   useEffect(() => {
-    if (drawable || !webgl) {
-      setStalled(false);
-      return;
-    }
+    // No `setStalled(false)` on the way out: the loading screen is fading by then, and
+    // clearing the flag would pull this line out of the middle of that fade. It leaves with
+    // the loader. The poll below still clears it while the load is genuinely running, which
+    // is the case that matters — a connection that comes back takes the line away.
+    if (drawable || !webgl) return;
     const id = window.setInterval(() => {
       setStalled(performance.now() - lastByteRef.current > STALL_MS);
     }, 1000);
@@ -819,14 +844,37 @@ export default function Room() {
    * fades up out of it. Nothing can misregister against a flat colour. The still image remains
    * for the two cases where it genuinely is the room: no WebGL2, and no scripting.
    *
-   * The fade's duration lives in room.css and nothing here reads it — the reveal is a class
-   * change, not a timer.
+   * The fade itself is a class change rather than a timer — `REVEAL_MS` is read only to tell
+   * the camera how long to hold still for, never to drive the opacity.
    */
   const [revealed, setRevealed] = useState(false);
   useEffect(() => {
     if (!drawable) return;
-    rigRef.current?.playIntro();
+    // Parked at the establishing pose for exactly the fade, then released. The move has no
+    // ease-in — its evenness is the whole character of it, see `INTRO_SETTLE` in cameraRig.ts
+    // — so releasing it *is* motion starting, and a shorter hold would have the room
+    // travelling while it is still arriving. Under reduced motion `playIntro` is a no-op, so
+    // this needs no special case.
+    rigRef.current?.playIntro(REVEAL_MS);
     setRevealed(true);
+  }, [drawable]);
+
+  /**
+   * Whether the loading screen is still mounted. It outlives `drawable` by its own fade, so
+   * the handover is a cross-fade: it used to be unmounted on the same commit that started the
+   * canvas coming up, which put a frame of bare `--room-bg` between the two. Two flags rather
+   * than one for the same reason as the title card above — a fade needs the element mounted
+   * while it runs.
+   *
+   * Not gated on `reduced`: the exit is opacity and nothing else, so there is no motion to
+   * suppress, and the canvas it crosses with fades under reduced motion too. Cutting one side
+   * of a cross-fade and not the other is worse than cutting neither.
+   */
+  const [loadShown, setLoadShown] = useState(true);
+  useEffect(() => {
+    if (!drawable) return;
+    const t = window.setTimeout(() => setLoadShown(false), LOAD_FADE_MS);
+    return () => clearTimeout(t);
   }, [drawable]);
 
   // ---- at-rest parallax ----------------------------------------------------
@@ -938,8 +986,11 @@ export default function Room() {
           light, not chrome — so this is a line of light along the floor of the frame rather
           than a spinner, and it is driven by real bytes (`--load`), never by a timeline
           guessing at how long a network takes. */}
-      {!drawable && webgl && (
-        <div className="room__load" aria-hidden="true">
+      {loadShown && webgl && (
+        <div
+          className={`room__load ${drawable ? "room__load--going" : ""}`}
+          aria-hidden="true"
+        >
           {/* **The wait is the one moment this site has the visitor's full attention and
              * nothing to show them, so it tells them what is actually arriving.** The room is
              * 1,179,648 Gaussians regressed from a single photograph, which is genuinely

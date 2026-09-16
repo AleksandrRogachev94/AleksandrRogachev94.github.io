@@ -109,7 +109,7 @@ export const ROOM_TUNING: RoomTuning = {
   drift: 0.03,
   breath: 0.025,
   introReach: 1,
-  introMs: 2600,
+  introMs: 2800,
   lateral: 1,
 };
 
@@ -158,13 +158,18 @@ export interface CameraRig {
    * exactly the jump that removing the poster fixed (Room.tsx, `revealed`). Calling it again
    * restarts it, and under reduced motion it does nothing at all.
    *
+   * `holdMs` parks the camera at that start pose before the move begins, which is how the
+   * reveal gets a still room to fade up into. **A hold, not a delay before arming**: the
+   * offset applies from the first frame either way, so the pose the fade uncovers is the pose
+   * the move departs from. No argument means move immediately, which is the harness's replay.
+   *
    * **It takes no aim point.** Turning the camera toward an object as it travels improves
    * the move and breaks everything else: `pinToArt` glues overlays to the art by compensating
    * translation and magnification, and a rotation is neither. A 1.5deg yaw slides the frame
    * ~38px while every hotspot, control and light stays put — enough to take the speaker's LED
    * off the speaker. Screen-space overlays and a rotating camera cannot both be right.
    */
-  playIntro(): void;
+  playIntro(holdMs?: number): void;
   /** Eased progress, 0 at home and 1 fully pushed in. Drives the UI cross-fade. */
   progress(): number;
   /** Cursor position in -1..1, for the at-rest parallax. */
@@ -301,6 +306,27 @@ const DRIFT_PERIOD_Z_MS = 26_000;
  */
 const INTRO_START: Vec3 = [-0.09, 0.02, -0.30];
 
+/**
+ * How much of the move is spent landing, as a fraction of its duration.
+ *
+ * **Everything before it is constant speed, and that is the move's whole character.** This
+ * ran on an ease-out — fastest at the departure, decelerating the rest of the way — and no
+ * retiming of it helped, because what the room is doing here is withdrawing to show you where
+ * you are, and a withdrawal that rushes and then dawdles is *performing* rather than showing.
+ * Even speed is calm, and calm is the room's register.
+ *
+ * The one thing constant speed cannot do is arrive. So the last 30% — about 840ms — eases
+ * out: a deceleration you can actually see, not merely enough to take the bump off a hard
+ * stop. The room slows into place and holds. The other 70% stays flat to floating-point
+ * noise, so the evenness is not traded away to buy it.
+ *
+ * **It is paid for in duration, not in speed.** The `1 - S/2` normaliser in `introEnv` is
+ * the bill: left alone, a longer settle takes the distance it gives up out of the body and
+ * the constant goes *up*, which is backwards — speeding the move up to make it land slower.
+ * `tuning.introMs` covers it instead, so the constant stays at ~0.13m/s whatever this is.
+ */
+const INTRO_SETTLE = 0.3;
+
 export function createCameraRig(
   renderer: RoomRenderer,
   imageAspect: number,
@@ -366,6 +392,10 @@ export function createCameraRig(
    * `update`, so it is paused by everything that already pauses the rAF — a visitor who
    * loads the page on a background tab still gets the move when they arrive at it, rather
    * than having it play to nobody.
+   *
+   * **Negative means held at the start pose, not yet moving** (see `introEnv`). The same
+   * clock covers the hold, so the hold inherits that pausing for free: a page that loads
+   * hidden does not spend its hold — and then its move — on an empty tab.
    */
   let introMs: number | null = null;
   /** Runs whenever `update` does, so drift is paused for free by everything that already
@@ -381,33 +411,38 @@ export function createCameraRig(
   motionQuery.addEventListener('change', onMotionChange);
 
   /**
-   * How much of `INTRO_START` is still applied: 1 at the first frame, 0 once home. Both
-   * components only ever decay, so nothing reverses.
+   * How much of `INTRO_START` is still applied: 1 at the start pose, 0 once home. Only ever
+   * decays, so nothing reverses.
    *
-   * **Two exponents, and which decays faster is the whole of the arc.** A single curve is a
-   * straight line in the X-Z plane. Letting the lateral go first (power 4 against 2.2) spends
-   * it while the camera is still deep in the room — where a given world-X offset buys the
-   * most screen movement, because near objects are nearest — and leaves the remaining
-   * two-thirds as a clean withdrawal. Swoop, then open out.
+   * **One number, not a component each.** It used to return two — the lateral decaying on a
+   * power of 4 against the depth's 2.2, spending the sideways offset early and withdrawing
+   * from there. Swoop, then open out. That arc went with the easing that made it legible:
+   * decayed evenly the components stay in proportion, so the path is a straight line at one
+   * speed. A curved path is a flourish and this move is not a flourish.
    *
-   * Ease-out in both: maximum speed on the first frame, decelerating to nothing. A move that
-   * departs from rest can start at full velocity, which is why this needs no ease-in and
-   * therefore has no stall. The stall is what made the very first version read as two moves.
+   * Branchless, and linear until `v` leaves zero: `u` is the constant-speed body, `S*v^2/2`
+   * is the distance the settle gives up, `1 - S/2` puts home back at exactly `u = 1`. Slope
+   * is 1 where the settle starts and 0 where it ends, so the only place the speed changes is
+   * the arrival.
    *
    * Returns null when nothing is playing, which includes the whole of reduced motion. Read
    * live, so toggling the OS setting mid-move stops it rather than needing a reload.
    */
-  function introEnv(): { lat: number; dep: number } | null {
+  function introEnv(): number | null {
     if (introMs === null || reduced) return null;
-    const u = introMs / tuning.introMs;
+    // Negative is the hold: `playIntro(holdMs)` starts the clock *before* zero, and every
+    // frame until it gets there returns 1 — the full start offset, unchanged. The camera is
+    // parked at the establishing pose rather than at home, which is the whole point: it is
+    // what the canvas fades up into, so there is nothing to jump from when the move begins.
+    const u = Math.max(0, introMs / tuning.introMs);
     if (u >= 1) {
       // Home, and nothing left to do. Retiring it here keeps this a pure function of a live
       // move, and means a later `playIntro()` — the harness replaying it — starts clean.
       introMs = null;
       return null;
     }
-    const k = 1 - u;
-    return { lat: Math.pow(k, 4), dep: Math.pow(k, 2.2) };
+    const v = Math.max(0, u - (1 - INTRO_SETTLE)) / INTRO_SETTLE;
+    return 1 - (u - (INTRO_SETTLE * v * v) / 2) / (1 - INTRO_SETTLE / 2);
   }
 
   const offsetX = () => renderer.camera.eye[0] - renderer.home.eye[0];
@@ -473,27 +508,25 @@ export function createCameraRig(
     // frame has nothing to show — see the note on `RoomTuning.breath`.
     const breathAmp = reduced ? 0 : tuning.breath;
     const driftZ = -((1 - Math.cos((clockMs / DRIFT_PERIOD_Z_MS) * Math.PI * 2)) / 2) * breathAmp;
-    // The establishing move *replaces* ambient motion rather than adding to it — a cross-fade
-    // on `ia`, not a sum. Summing would put the peak at 0.10 + 0.115 = 0.215m, nearly double
-    // the disocclusion budget, and would do it at the one moment the room has a visitor's
-    // whole attention. Cross-faded, the total offset is bounded by the larger of the two.
+    // The establishing move *replaces* ambient motion rather than adding to it — a cross-fade,
+    // not a sum. Summed, the peak would be 0.10 + 0.115 = 0.215m, nearly double the
+    // disocclusion budget, and it would be a second, slower gesture running inside a
+    // deliberate one at the one moment the room has a visitor's whole attention. Cross-faded,
+    // the total offset is bounded by the larger of the two and the drift arrives as the move
+    // leaves.
     //
     // Both then fade together on `e`, so a hotspot clicked mid-intro simply wins: the push
     // takes the camera over and the intro's clock runs out unwatched, with no cancellation
     // and no state to unwind. Same reason `release()` does not clear `target`.
-    const env = introEnv();
-    const iLat = env ? env.lat : 0;
-    const iDep = env ? env.dep : 0;
-
-    // Ambient motion cross-fades against the move rather than adding to it. Summed, an intro
-    // and a full-strength drift-plus-cursor would be well over the disocclusion budget at the
-    // one moment the room has a visitor's whole attention — and would be a second, slower
-    // gesture inside a deliberate one. It arrives as the move leaves.
-    const ambient = 1 - iLat;
+    //
+    // Even now rather than front-loaded: `intro` decays linearly, so drift and cursor lean
+    // come up at a constant rate instead of rushing in behind a fast-decaying `k^4`.
+    const intro = introEnv() ?? 0;
+    const ambient = 1 - intro;
     const reach = tuning.introReach;
 
-    let px = INTRO_START[0] * reach * iLat + (pointer.x * amp + driftX) * ambient;
-    let py = INTRO_START[1] * reach * iLat + (pointer.y * amp * 0.6 + driftY) * ambient;
+    let px = INTRO_START[0] * reach * intro + (pointer.x * amp + driftX) * ambient;
+    let py = INTRO_START[1] * reach * intro + (pointer.y * amp * 0.6 + driftY) * ambient;
 
     // **One clamp on total lateral excursion, applied after everything has had its say.**
     // Several independent sources contribute to it — the move, idle drift, the cursor — and
@@ -509,7 +542,7 @@ export function createCameraRig(
     px *= 1 - e;
     py *= 1 - e;
 
-    const pz = (INTRO_START[2] * reach * iDep + driftZ * ambient) * (1 - e);
+    const pz = (INTRO_START[2] * reach * intro + driftZ * ambient) * (1 - e);
     const home: Vec3 = [px, py, -dolly + pz];
 
     const cam = renderer.camera;
@@ -560,7 +593,7 @@ export function createCameraRig(
     // Restartable by design: assigning rather than guarding means the dev harness can replay
     // the move from a button without a reset, and a second call mid-move is a legible
     // "do it again" rather than a silent no-op.
-    playIntro() { introMs = 0; },
+    playIntro(holdMs = 0) { introMs = -Math.max(0, holdMs); },
     // What `update` actually applied this frame, not a second evaluation of the curve —
     // the two must agree, because the stylesheet uses this to decide how much to blur the
     // room and the panel is registered against where the camera really is.
