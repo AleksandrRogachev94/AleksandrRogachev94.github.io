@@ -1,0 +1,54 @@
+---
+/**
+ * The shared <head>.
+ *
+ * Four pages carried a byte-identical six-tag head and index.astro carried the same six plus
+ * its own inline script, so the favicon set below would otherwise have been a five-file
+ * copy-paste — the kind that drifts the moment one page is edited and the others are not.
+ *
+ * This is an .astro component, not a React one: it has no client runtime and is inlined at
+ * build time. Nothing in <head> should ever be an island.
+ *
+ * Page-specific tags go through the <slot />, so index.astro keeps its inline mat-colour
+ * script without this component having to know anything about it.
+ */
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+
+// Astro.url is the page being rendered, not this component's own location, so canonical
+// stays correct from inside here. Astro.site comes from `site` in astro.config.
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+{/*
+  The icon set, smallest-useful rather than the sprawling 20-file output of a favicon
+  generator. Together these are under 3KB.
+
+  - favicon.svg      the mark; scales to any size a browser asks for.
+  - favicon-32.png   Safari's SVG-favicon support is still unreliable, and this is the
+                     explicit fallback for it and anything else that skips the SVG.
+  - favicon.ico      NOT referenced here on purpose. It sits at the site root so that bare
+                     /favicon.ico requests resolve — those come from crawlers and readers
+                     that never parse the HTML, so a <link> would not help them anyway.
+  - apple-touch-icon iOS home screen. Full-bleed and square; iOS rounds it itself and
+                     composites transparency onto black, so the file must not be rounded.
+
+  Order matters: browsers that understand both take the last one they support, so the SVG
+  is declared first and the PNG after it as the fallback.
+*/}
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+<link rel="canonical" href={canonical} />
+<title>{title}</title>
+<meta name="description" content={description} />
+
+<slot />

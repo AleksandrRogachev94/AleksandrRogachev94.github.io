@@ -1,6 +1,7 @@
 ---
 import '../../styles/tokens.css';
 import { PROJECTS } from '../../data/projects';
+import Head from '../../components/Head.astro';
 
 // The software bench as a real page.
 //
@@ -19,12 +20,7 @@ const description = 'Software projects, starting with flowlab.';
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
-    <title>{title}</title>
-    <meta name="description" content={description} />
+    <Head title={title} description={description} />
   </head>
   <body class="bench-page">
     <main>

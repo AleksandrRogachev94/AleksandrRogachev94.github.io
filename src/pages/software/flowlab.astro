@@ -1,6 +1,7 @@
 ---
 import '../../styles/tokens.css';
 import { PROJECTS } from '../../data/projects';
+import Head from '../../components/Head.astro';
 
 // One project's real page (CLAUDE.md rule 2): a crawler, a no-JS browser, and a visitor
 // on the reduced-motion path all land here directly, same as anyone who clicked through
@@ -19,12 +20,7 @@ const description = flowlab.line;
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
-    <title>{title}</title>
-    <meta name="description" content={description} />
+    <Head title={title} description={description} />
   </head>
   <body class="project-page" style={{ '--accent': flowlab.accent }}>
     <main>

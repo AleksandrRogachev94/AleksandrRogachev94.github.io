@@ -38,3 +38,5 @@ art/build/
 # rasters the site actually loads are baked from it into public/art/ and committed there.
 # Keep it outside git; see art/README.md.
 art/*.ply
+
+.mcp.json

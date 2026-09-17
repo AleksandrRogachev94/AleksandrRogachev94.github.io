@@ -27,6 +27,7 @@
  */
 import '../styles/tokens.css';
 import { DEMO, HARDWARE, HEADLINE, LEDE, FACTS, NOTES, DOCS, REPO } from '../data/robotrail';
+import Head from '../components/Head.astro';
 
 const title = 'RoboTrail — Alex Rogachev';
 const description = 'A 3D-printed Raspberry Pi rover that maps a room by itself: '
@@ -37,12 +38,7 @@ const description = 'A 3D-printed Raspberry Pi rover that maps a room by itself:
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
-    <title>{title}</title>
-    <meta name="description" content={description} />
+    <Head title={title} description={description} />
   </head>
   <body class="project-page" style={{ '--accent': 'var(--accent-robotrail)' }}>
     <main>

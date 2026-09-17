@@ -5,6 +5,7 @@ import Room from '../components/Room.tsx';
 import { SITE, ROOM_LINKS, ELSEWHERE } from '../data/site';
 import { NIGHT_FROM, NIGHT_UNTIL } from '../scripts/daylight';
 import { WINTER_MONTHS, FALL_MONTHS } from '../scripts/season';
+import Head from '../components/Head.astro';
 
 // The room is one screenful at the top of a real page — it is not a replacement for the
 // document and never hides it. What is below is deliberately *not* a text copy of the room:
@@ -17,10 +18,7 @@ const description = SITE.tagline;
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
+    <Head title={title} description={description}>
     {/*
       **No poster preload, and no inline script to pick which poster.** Both existed to put
       the flat master on screen during the ~9.6MB splat download, and the room no longer shows
@@ -33,8 +31,6 @@ const description = SITE.tagline;
       used to say must not happen. The `<noscript>` room below and the island's own fallback
       both load it the ordinary way, on the paths where it is actually the room.
     */}
-    <title>{title}</title>
-    <meta name="description" content={description} />
     {/*
       **The mat's colour, decided before anything paints.**
 
@@ -73,6 +69,7 @@ const description = SITE.tagline;
           ? 'fall'
           : 'summer';
     </script>
+    </Head>
   </head>
   <body>
     <Room client:load />

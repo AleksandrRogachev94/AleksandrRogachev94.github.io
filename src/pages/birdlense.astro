@@ -19,6 +19,7 @@
  */
 import '../styles/tokens.css';
 import { SHOTS, FACTS, NOTES, REPO } from '../data/birdlense';
+import Head from '../components/Head.astro';
 
 const title = 'BirdLense — Alex Rogachev';
 const description = 'A Raspberry Pi bird feeder that watches, listens and keeps a log: '
@@ -28,12 +29,7 @@ const description = 'A Raspberry Pi bird feeder that watches, listens and keeps 
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
-    <title>{title}</title>
-    <meta name="description" content={description} />
+    <Head title={title} description={description} />
   </head>
   <body class="project-page" style={{ '--accent': 'var(--accent-birdlense)' }}>
     <main>

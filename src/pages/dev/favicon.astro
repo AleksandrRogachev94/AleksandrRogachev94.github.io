@@ -1,0 +1,126 @@
+---
+/**
+ * Favicon candidates at real size. Dev-only, delete once one is chosen.
+ *
+ * A favicon can only be judged at 16-32px against real tab chrome, and a tab shows one at a
+ * time. Follows the existing dev/ convention (room, splat, load).
+ */
+const INK = '#2c241d';      // --room-ink
+const AMBER = '#f0b95e';    // --room-amber
+const DAY = '#b9d6e6';      // --room-daylight
+const LINE = '#d2c0a6';     // --room-line
+const PLUM = '#301d23';     // --room-bg-night
+
+// Thin glazing bars + a sill. The bars are 1 unit of 16 = 1px at 16px, versus the 2-unit
+// gaps of the first attempt, which read as four separate tiles.
+const sash = (glass: string, body: string, sill: string) => `
+  <rect width="16" height="16" rx="3.5" fill="${body}"/>
+  <rect x="3" y="2.6" width="10" height="9.2" fill="${glass}"/>
+  <g fill="${body}">
+    <rect x="7.5" y="2.6" width="1" height="9.2"/>
+    <rect x="3" y="6.7" width="10" height="1"/>
+  </g>
+  <rect x="2" y="12.3" width="12" height="1.3" rx="0.35" fill="${sill}"/>`;
+
+// Two over three: taller panes, closer to the master's proportion than a square 2x2.
+const tall = (glass: string, body: string, sill: string) => `
+  <rect width="16" height="16" rx="3.5" fill="${body}"/>
+  <rect x="3.2" y="2.2" width="9.6" height="10" fill="${glass}"/>
+  <g fill="${body}">
+    <rect x="7.6" y="2.2" width="0.9" height="10"/>
+    <rect x="3.2" y="5.4" width="9.6" height="0.9"/>
+    <rect x="3.2" y="8.6" width="9.6" height="0.9"/>
+  </g>
+  <rect x="2" y="12.6" width="12" height="1.2" rx="0.3" fill="${sill}"/>`;
+
+// No frame at all: the glass IS the mark, the bars are cut out of it. Maximum light area,
+// which is what survives best at 16px.
+const glassOnly = (glass: string, bar: string) => `
+  <rect width="16" height="16" rx="3.5" fill="${glass}"/>
+  <g fill="${bar}">
+    <rect x="7.4" y="0" width="1.2" height="16"/>
+    <rect x="0" y="7.4" width="16" height="1.2"/>
+  </g>`;
+
+// The composition rule from CLAUDE.md: two walls meeting, floor receding.
+const corner = `
+  <rect width="16" height="16" rx="3.5" fill="${LINE}"/>
+  <path d="M0 0 H7 V10 H0 Z" fill="${INK}"/>
+  <path d="M7 0 H16 V10 H7 Z" fill="#6d5c4b"/>
+  <path d="M0 10 H16 V16 H0 Z" fill="${AMBER}"/>`;
+
+const CANDIDATES = [
+  { id: 'A', name: 'Daylight sash + sill', note: 'Cool glass, warm frame, thin bars. Looking OUT, which is where you actually stand.', svg: sash(DAY, INK, LINE) },
+  { id: 'B', name: 'Lit sash + sill', note: 'Same geometry, amber glass. Isolates colour from shape — compare against A.', svg: sash(AMBER, INK, LINE) },
+  { id: 'C', name: 'Daylight, two-over-three', note: 'Taller panes, nearer the six-over-six master. Risk: bars go to mush at 16.', svg: tall(DAY, INK, LINE) },
+  { id: 'D', name: 'Glass only, no frame', note: 'Bars cut straight out of a full-bleed pane. Most light area, least architecture.', svg: glassOnly(DAY, INK) },
+  { id: 'E', name: 'Glass only, plum bars', note: 'As D but the night ground, which is warmer than flat ink.', svg: glassOnly(DAY, PLUM) },
+  { id: 'F', name: 'Room corner', note: 'Not a window at all — the composition rule itself.', svg: corner },
+  { id: 'X', name: 'Current (for reference)', note: 'What ships right now. The one that reads as an app grid.', svg: `<rect width="16" height="16" rx="3.5" fill="${INK}"/><g fill="${AMBER}"><rect x="3" y="2" width="4" height="5"/><rect x="9" y="2" width="4" height="5"/><rect x="3" y="9" width="4" height="5"/><rect x="9" y="9" width="4" height="5"/></g>` },
+];
+
+const SIZES = [16, 20, 24, 32, 48, 128];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Favicon candidates</title>
+    <style>
+      body { margin: 0; font: 13px/1.5 ui-sans-serif, system-ui, sans-serif; background: #17181a; color: #e6e9ed; }
+      .wrap { max-width: 1100px; margin: 0 auto; padding: 32px 24px 64px; }
+      h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+      .sub { color: #868d97; margin: 0 0 28px; }
+      .row { display: grid; grid-template-columns: 200px 1fr 1fr; gap: 20px; align-items: center;
+             padding: 16px 0; border-top: 1px solid #2a2d33; }
+      .meta b { display: block; font-size: 13px; }
+      .meta span { color: #868d97; font-size: 12px; }
+      .meta code { color: #f0b95e; font-size: 11px; }
+      .strip { display: flex; align-items: flex-end; gap: 16px; padding: 14px 16px; border-radius: 8px; }
+      .light { background: #f2e9dc; }
+      .dark { background: #202124; }
+      .cell { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+      .cell em { font-style: normal; font-size: 10px; color: #8a8f97; }
+      .light .cell em { color: #8b7d6b; }
+      svg { display: block; image-rendering: auto; }
+      .label { font-size: 11px; color: #868d97; padding-left: 16px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Favicon candidates</h1>
+      <p class="sub">Judge at 16 and 20. Everything above 32 flatters a mark — tabs mostly render 16 or 32.</p>
+      <div class="row" style="border-top:none">
+        <div></div>
+        <div class="label">on warm paper &nbsp;<code style="color:#8b7d6b">--room-bg</code></div>
+        <div class="label">on dark tab chrome</div>
+      </div>
+      {CANDIDATES.map((c) => (
+        <div class="row">
+          <div class="meta">
+            <b>{c.id} — {c.name}</b>
+            <span>{c.note}</span>
+          </div>
+          <div class="strip light">
+            {SIZES.map((s) => (
+              <div class="cell">
+                <svg width={s} height={s} viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" set:html={c.svg} />
+                <em>{s}</em>
+              </div>
+            ))}
+          </div>
+          <div class="strip dark">
+            {SIZES.map((s) => (
+              <div class="cell">
+                <svg width={s} height={s} viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" set:html={c.svg} />
+                <em>{s}</em>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  </body>
+</html>
