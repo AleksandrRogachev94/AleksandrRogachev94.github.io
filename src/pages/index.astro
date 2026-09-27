@@ -11,7 +11,7 @@ import Head from '../components/Head.astro';
 // document and never hides it. What is below is deliberately *not* a text copy of the room:
 // it is who the site is about, plus the links that make every destination crawlable and
 // reachable with JS off (CLAUDE.md rule 2). See the note above <main>.
-const title = SITE.name;
+const title = `${SITE.name} — Web Applications & Machine Learning`;
 const description = SITE.tagline;
 ---
 
@@ -91,7 +91,7 @@ const description = SITE.tagline;
       visitor gets of what the rectangle above them was.
     */}
     <main class="doc">
-      <h1>{title}</h1>
+      <h1>{SITE.name}</h1>
       <p class="doc__lede">{description}</p>
 
       {/*
