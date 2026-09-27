@@ -15,13 +15,15 @@
 interface Props {
   title: string;
   description: string;
+  image?: string;
 }
 
-const { title, description } = Astro.props;
+const { title, description, image = '/og-image.jpg' } = Astro.props;
 
 // Astro.url is the page being rendered, not this component's own location, so canonical
 // stays correct from inside here. Astro.site comes from `site` in astro.config.
 const canonical = new URL(Astro.url.pathname, Astro.site);
+const ogImage = new URL(image, Astro.site);
 ---
 
 <meta charset="utf-8" />
@@ -50,5 +52,21 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
 <link rel="canonical" href={canonical} />
 <title>{title}</title>
 <meta name="description" content={description} />
+
+{/* OpenGraph / Social Sharing */}
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Alex Rogachev" />
+<meta property="og:url" content={canonical} />
+<meta property="og:title" content={title} />
+<meta property="og:description" content={description} />
+<meta property="og:image" content={ogImage} />
+<meta property="og:image:width" content="1200" />
+<meta property="og:image:height" content="630" />
+
+{/* Twitter Card */}
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={title} />
+<meta name="twitter:description" content={description} />
+<meta name="twitter:image" content={ogImage} />
 
 <slot />
