@@ -71,12 +71,14 @@ const ogImage = new URL(image, Astro.site);
 <meta name="twitter:description" content={description} />
 <meta name="twitter:image" content={ogImage} />
 
-{/* Cloudflare Web Analytics */}
-<script
-  is:inline
-  type="module"
-  src="https://static.cloudflareinsights.com/beacon.min.js"
-  data-cf-beacon='{"token": "dc0de8789a494ceb92f147c2b9e7f16d"}'
-></script>
+{/* Cloudflare Web Analytics (production only) */}
+{import.meta.env.PROD && (
+  <script
+    is:inline
+    type="module"
+    src="https://static.cloudflareinsights.com/beacon.min.js"
+    data-cf-beacon='{"token": "dc0de8789a494ceb92f147c2b9e7f16d"}'
+  ></script>
+)}
 
 <slot />

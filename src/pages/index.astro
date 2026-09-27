@@ -216,6 +216,17 @@ const description = SITE.tagline;
         margin: 0 auto;
         padding: 64px 24px;
       }
+
+      /* On mobile and short viewports where scroll-snapping is disabled, the room is a
+       * wide hero header. The document must not vertically center inside a 100svh box,
+       * which left ~200px+ of dead empty gap between the room and the heading. */
+      @media (max-width: 767px), (max-height: 699px) {
+        .doc {
+          min-height: auto;
+          justify-content: flex-start;
+          padding: 28px 20px 64px;
+        }
+      }
       .doc h1 { font-size: 2rem; margin: 0 0 0.25em; }
       .doc__lede { color: var(--room-ink-soft); font-size: 1.1rem; margin-top: 0; }
       /* `.doc section` and `.doc h2` used to be here, for the three project sections. There

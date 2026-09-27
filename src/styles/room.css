@@ -1202,14 +1202,26 @@ canvas.room__canvas {
   box-shadow: 0 0 0 calc(var(--ring-offset) + 4px) color-mix(in srgb, var(--room-bg) 80%, transparent);
 }
 
+.room--busy .hotspots,
+.room[data-transit] .hotspots {
+  pointer-events: none;
+  visibility: hidden;
+}
+
 /* Out in one frame when a push starts, and gated on the class rather than on --push: the
  * camera is already moving on the frame the class lands, and anything that eases out from
- * here spends that ease sitting over art that has moved on. Last in source order so it
- * beats the hover rule at equal specificity — the pointer is usually still on the object
- * at the moment of the click. */
-.room--busy .hotspot__light {
+ * here spends that ease sitting over art that has moved on.
+ *
+ * Explicitly out-ranks :hover and :focus-visible: on touch devices, a tapped link retains
+ * :hover and :focus until another element is touched, which previously had higher
+ * specificity (0,3,0 vs 0,2,0) and kept the glow pinned at rest coordinates during the push. */
+.room--busy .hotspot__light,
+.room--busy .hotspot:hover .hotspot__light,
+.room--busy .hotspot:focus .hotspot__light,
+.room--busy .hotspot:focus-visible .hotspot__light,
+.room--busy .hotspot:active .hotspot__light {
   transition: none;
-  opacity: 0;
+  opacity: 0 !important;
 }
 
 .hotspot__label {
