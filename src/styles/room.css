@@ -2526,9 +2526,11 @@ canvas.room__canvas {
     width: auto;
     max-height: 52vh;
   }
-  /* Tighter onto the bird as the frame narrows. Scoped to the window: the rover's ground
-   * is centred at every width. */
+  /* Tighter onto the bird as the frame narrows. */
   .focus--feed { --view-pos: 62% 40%; }
+  /* On narrow portrait viewports, center cleanly onto the SLAM occupancy map and robot path
+   * (the right half of the 16:9 dashboard recording) rather than straddling the split-screen seam. */
+  .focus--rover { --view-pos: 78% 42%; }
   .field__where { display: none; }
 }
 
